@@ -13,6 +13,7 @@ pub struct App {
     game: GameState,
     status: String,
     end_state: Option<EndState>,
+    help_expanded: bool,
 }
 
 pub enum Msg {
@@ -28,6 +29,7 @@ pub enum Msg {
     AutoFoundation,
     ClearSelection,
     ZeusVision,
+    ToggleHelp,
 }
 
 impl App {
@@ -165,6 +167,7 @@ impl Component for App {
             game: GameState::new_shuffled(),
             status: "Draw from stock and build the four temples from Ace to King.".to_string(),
             end_state: None,
+            help_expanded: false,
         }
     }
 
@@ -172,7 +175,10 @@ impl Component for App {
         if self.end_state.is_some() && !matches!(msg, Msg::Noop | Msg::NewGame) {
             self.status = match self.end_state {
                 Some(EndState::ZeusThunder) => "Zeus' Thunder is heard".to_string(),
-                Some(EndState::OutOfGold) => "Temple Gold has run out. You lose.".to_string(),
+                Some(EndState::OutOfGold) => {
+                    "Temple Gold has run out. You lose. Final vision reveals all cards."
+                        .to_string()
+                }
                 None => self.status.clone(),
             };
             return true;
@@ -207,8 +213,11 @@ impl Component for App {
                 };
 
                 if !had_stock && had_waste && self.game.temple_gold == 0 {
+                    self.game.zeus_vision();
                     self.end_state = Some(EndState::OutOfGold);
-                    self.status = "Temple Gold has run out. You lose.".to_string();
+                    self.status =
+                        "Temple Gold has run out. You lose. Final vision reveals all cards."
+                            .to_string();
                 }
             }
             Msg::ClickWaste => {
@@ -334,6 +343,14 @@ impl Component for App {
                 self.end_state = Some(EndState::ZeusThunder);
                 self.status = "Zeus' Thunder is heard".to_string();
             }
+            Msg::ToggleHelp => {
+                self.help_expanded = !self.help_expanded;
+                self.status = if self.help_expanded {
+                    "Help expanded.".to_string()
+                } else {
+                    "Help minimized.".to_string()
+                };
+            }
         }
 
         if self.game.won && self.end_state.is_none() {
@@ -349,9 +366,15 @@ impl Component for App {
         let auto_foundation = ctx.link().callback(|_| Msg::AutoFoundation);
         let clear_selection = ctx.link().callback(|_| Msg::ClearSelection);
         let zeus_vision = ctx.link().callback(|_| Msg::ZeusVision);
+        let toggle_help = ctx.link().callback(|_| Msg::ToggleHelp);
         let click_waste = ctx.link().callback(|_| Msg::ClickWaste);
         let double_click_waste = ctx.link().callback(|_| Msg::DoubleClickWaste);
         let locked = self.end_state.is_some();
+        let help_button_label = if self.help_expanded {
+            "Minimize Help"
+        } else {
+            "Expand Help"
+        };
 
         let stock_view = if self.game.stock.is_empty() {
             let label = if self.game.waste.is_empty() {
@@ -497,6 +520,7 @@ impl Component for App {
                     <button type="button" onclick={auto_foundation} disabled={locked}>{ "Auto To Temple" }</button>
                     <button type="button" onclick={clear_selection} disabled={locked}>{ "Clear Selection" }</button>
                     <button type="button" onclick={zeus_vision} disabled={locked}>{ "Zeus' Vision" }</button>
+                    <button type="button" class="help-toggle-btn" onclick={toggle_help}>{ help_button_label }</button>
                 </section>
 
                 <section class="status-row">
@@ -527,7 +551,7 @@ impl Component for App {
                     </div>
                 </section>
 
-                <section class="help-strip">
+                <section class={classes!("help-strip", (!self.help_expanded).then_some("collapsed"))}>
                     <span>{ "Click to select and move." }</span>
                     <span>{ "Double-click waste/top tableau card to send it to a temple." }</span>
                     <span>{ "Build tableau in descending alternating colors." }</span>

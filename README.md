@@ -1,6 +1,6 @@
 # Solitare of Olympus
 
-Ancient Greek/Roman themed Klondike solitaire built with Rust + Yew + WebAssembly.
+Ancient Greek and Roman themed Klondike solitaire built with Rust + Yew + WebAssembly.
 
 ## Features
 
