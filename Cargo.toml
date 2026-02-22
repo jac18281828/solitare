@@ -12,7 +12,7 @@ wasm-logger = "0.2.0"
 yew = { version = "0.22.0", features = ["csr"] }
 js-sys = "0.3.83"
 rand = "0.8.5"
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 getrandom = { version = "0.2.15", features = ["js"] }
 
 [profile.release]
