@@ -1,0 +1,27 @@
+[package]
+name = "solitare"
+version = "0.1.0"
+edition = "2024"
+description = "Ancient-themed Klondike solitaire built with Rust, Yew, and WebAssembly"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+log = { version = "0.4.29", features = ["release_max_level_info"] }
+wasm-logger = "0.2.0"
+yew = { version = "0.22.0", features = ["csr"] }
+js-sys = "0.3.83"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+getrandom = { version = "0.2.15", features = ["js"] }
+
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true
+
+[profile.release.package."*"]
+opt-level = 'z'
+strip = true

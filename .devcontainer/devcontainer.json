@@ -1,0 +1,33 @@
+{
+    "name": "solitare-wasm-dev",
+    "build": {
+        "context": "..",
+        "dockerfile": "../Dockerfile"
+    },
+    "workspaceFolder": "/workspaces/solitare",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "version": "latest"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb",
+                "fill-labs.dependi"
+            ],
+            "settings": {
+                "rust-analyzer.check.command": "clippy"
+            }
+        }
+    },
+    "forwardPorts": [8080],
+    "portsAttributes": {
+        "8080": {
+            "label": "Trunk Dev Server",
+            "onAutoForward": "openBrowser"
+        }
+    },
+    "remoteUser": "vscode"
+}
