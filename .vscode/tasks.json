@@ -1,0 +1,91 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "fmt",
+            "type": "shell",
+            "command": "cargo fmt --check",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "lint",
+            "type": "shell",
+            "command": "cargo clippy --all-features --no-deps -- -D warnings",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "fmt",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cargo build",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "lint",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "wasm-build",
+            "type": "shell",
+            "command": "trunk build --release",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "lint",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "check",
+            "type": "shell",
+            "command": "cargo check",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "lint",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "cargo test",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "lint",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "serve",
+            "type": "shell",
+            "command": "trunk serve --release",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "none"
+        }
+    ]
+}

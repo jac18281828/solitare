@@ -9,6 +9,13 @@
     --ink: #1f1a14;
     --wine: #8a2134;
     --charcoal: #1f2530;
+    --art-dionysus: url("resources/dionysus.jpg");
+    --art-laurel: url("resources/laurel.jpg");
+    --art-temple: url("resources/temple_gold.jpg");
+    --art-nymph-blonde: url("resources/nymph_blonde.jpg");
+    --art-nymph-brunette: url("resources/nymph_brunette.jpg");
+    --art-coin: url("resources/coin.jpg");
+    --art-temple-with-coin: url("resources/temple_with_coin.jpg");
     --card-w: clamp(72px, 10vw, 102px);
     --card-h: calc(var(--card-w) * 1.42);
     --pile-gap: clamp(8px, 1.2vw, 16px);
@@ -83,6 +90,80 @@ body::before {
         radial-gradient(circle at 94% 90%, rgba(222, 209, 142, 0.18), transparent 16%);
 }
 
+.felt-art {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image:
+        radial-gradient(circle at 35% 12%, rgba(255, 245, 203, 0.14), transparent 28%),
+        var(--art-laurel),
+        var(--art-temple);
+    background-size: auto, 34% auto, 34% auto;
+    background-position: center top, 2% 42%, 98% 42%;
+    background-repeat: no-repeat;
+    opacity: 0;
+    mix-blend-mode: screen;
+    transition: opacity 0.35s ease;
+}
+
+.art-dionysus {
+    background-image: var(--art-dionysus);
+}
+
+.art-laurel {
+    background-image: var(--art-laurel);
+}
+
+.art-temple {
+    background-image: var(--art-temple);
+}
+
+.art-temple-with-coin {
+    background-image: var(--art-temple-with-coin);
+}
+
+.art-nymph-blonde {
+    background-image: var(--art-nymph-blonde);
+}
+
+.art-nymph-brunette {
+    background-image: var(--art-nymph-brunette);
+}
+
+.host-nymphs {
+    position: absolute;
+    inset: 8px 10px auto;
+    height: clamp(96px, 16vw, 190px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.host-nymph {
+    position: absolute;
+    top: 0;
+    width: clamp(68px, 11vw, 132px);
+    border-radius: 16px;
+    background-size: cover;
+    background-position: center top;
+    border: 1px solid rgba(229, 194, 104, 0.52);
+    box-shadow:
+        0 8px 14px rgba(0, 0, 0, 0.3),
+        inset 0 0 0 1px rgba(247, 229, 180, 0.26);
+    opacity: 0.82;
+    filter: saturate(1.06) contrast(1.04);
+}
+
+.host-nymph.left {
+    left: 0;
+    aspect-ratio: 480 / 804;
+}
+
+.host-nymph.right {
+    right: 0;
+    aspect-ratio: 502 / 680;
+}
+
 .thunder-ended {
     box-shadow:
         0 30px 50px rgba(0, 0, 0, 0.35),
@@ -100,6 +181,100 @@ body::before {
     border-color: rgba(214, 132, 109, 0.6);
 }
 
+.victory-ended {
+    box-shadow:
+        0 30px 50px rgba(0, 0, 0, 0.35),
+        inset 0 0 0 2px rgba(228, 189, 83, 0.8),
+        inset 0 0 30px rgba(192, 142, 27, 0.32);
+}
+
+.victory-ended .status-text {
+    background: rgba(69, 44, 7, 0.72);
+    border-color: rgba(236, 202, 118, 0.62);
+}
+
+.victory-ended .felt-art {
+    opacity: 0.54;
+}
+
+.victory-temple {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: clamp(132px, 20vw, 250px);
+    aspect-ratio: 499 / 679;
+    border-radius: 20px;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid rgba(235, 201, 110, 0.75);
+    box-shadow:
+        0 14px 24px rgba(0, 0, 0, 0.34),
+        inset 0 0 0 2px rgba(251, 235, 182, 0.28);
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(18px) scale(0.92);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.victory-ended .victory-temple {
+    opacity: 0.9;
+    animation: temple-float 3.6s ease-in-out infinite;
+}
+
+@keyframes temple-float {
+    0% {
+        transform: translate(-50%, -50%) translateY(8px) scale(0.95);
+    }
+    50% {
+        transform: translate(-50%, -50%) translateY(-10px) scale(1);
+    }
+    100% {
+        transform: translate(-50%, -50%) translateY(8px) scale(0.95);
+    }
+}
+
+.victory-coins {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.victory-coin {
+    position: absolute;
+    top: -18%;
+    left: calc((var(--coin-index) * 7%) - 8%);
+    width: clamp(28px, 3.4vw, 44px);
+    aspect-ratio: 1;
+    background-image: var(--art-coin);
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: transparent;
+    mix-blend-mode: darken;
+    filter: saturate(1.2) contrast(1.1);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    will-change: transform, opacity;
+    animation: coin-fall 1.8s linear infinite;
+    animation-delay: calc(var(--coin-index) * 70ms);
+}
+
+@keyframes coin-fall {
+    0% {
+        transform: translateY(0) rotate(0deg);
+        opacity: 0;
+    }
+    12% {
+        opacity: 0.95;
+    }
+    100% {
+        transform: translateY(125vh) rotate(520deg);
+        opacity: 0;
+    }
+}
+
 .title-wrap,
 .control-row,
 .status-row,
@@ -113,6 +288,26 @@ body::before {
 .title-wrap {
     text-align: center;
     margin-bottom: 10px;
+    padding-inline: clamp(74px, 13vw, 170px);
+}
+
+.title-art {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.title-medallion {
+    width: clamp(40px, 5vw, 58px);
+    aspect-ratio: 1;
+    border-radius: 999px;
+    border: 1px solid rgba(223, 191, 103, 0.72);
+    background-size: cover;
+    background-position: center;
+    box-shadow:
+        0 6px 12px rgba(0, 0, 0, 0.3),
+        inset 0 0 0 2px rgba(246, 223, 161, 0.35);
 }
 
 .title-wrap h1 {
@@ -209,6 +404,30 @@ body::before {
     flex-wrap: wrap;
 }
 
+.top-board::before {
+    content: "";
+    position: absolute;
+    inset: -6px 0 auto;
+    height: calc(var(--card-h) + 44px);
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    background-image: var(--art-laurel), var(--art-temple);
+    background-repeat: no-repeat;
+    background-size: 20% auto, 20% auto;
+    background-position: left center, right center;
+    transition: opacity 0.35s ease;
+}
+
+.victory-ended .top-board::before {
+    opacity: 0.22;
+}
+
+.top-board > * {
+    position: relative;
+    z-index: 1;
+}
+
 .draw-group,
 .foundation-group {
     display: flex;
@@ -277,11 +496,39 @@ body::before {
 }
 
 .card.zeus-revealed {
-    filter: grayscale(0.8) saturate(0.55) brightness(0.88);
+    filter: saturate(0.72) brightness(0.9) contrast(0.95);
+}
+
+.card.face.zeus-revealed::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+        180deg,
+        rgba(218, 223, 233, 0.14) 0%,
+        rgba(116, 124, 140, 0.12) 100%
+    );
+}
+
+.card.zeus-revealed.red {
+    color: #7a3a45;
+}
+
+.card.zeus-revealed.black {
+    color: #3f4652;
 }
 
 .card.zeus-revealed .motif {
-    opacity: 0.72;
+    opacity: 0.78;
+}
+
+.card.zeus-revealed.red .center .motif {
+    color: rgba(118, 48, 59, 0.88);
+}
+
+.card.zeus-revealed.black .center .motif {
+    color: rgba(58, 65, 77, 0.88);
 }
 
 .card .corner {
@@ -313,11 +560,33 @@ body::before {
     justify-content: center;
     text-align: center;
     gap: 2px;
+    border-radius: 10px;
+    overflow: hidden;
+    isolation: isolate;
+}
+
+.card .center .center-art {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.34;
+    filter: saturate(0.78) contrast(1.04);
+    mix-blend-mode: multiply;
+}
+
+.card.court .center .center-art {
+    opacity: 0.46;
+    background-position: center 20%;
 }
 
 .card .center .glyph {
     font-size: 2rem;
     line-height: 1;
+    position: relative;
+    z-index: 1;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .card .center .motif {
@@ -325,6 +594,9 @@ body::before {
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: rgba(30, 24, 16, 0.86);
+    position: relative;
+    z-index: 1;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 
 .card.red .center .motif {
@@ -367,8 +639,12 @@ body::before {
     border-radius: 999px;
     background:
         radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.35), transparent 44%),
-        linear-gradient(160deg, #f5da95, #af7f26);
+        linear-gradient(160deg, rgba(245, 218, 149, 0.94), rgba(175, 127, 38, 0.94)),
+        var(--art-temple);
+    background-size: auto, auto, cover;
+    background-position: center;
     box-shadow: 0 3px 7px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(235, 206, 121, 0.7);
     pointer-events: none;
     z-index: 2;
 }
@@ -476,6 +752,15 @@ body::before {
         --card-w: clamp(68px, 12vw, 92px);
     }
 
+    .title-wrap {
+        padding-inline: clamp(62px, 16vw, 120px);
+    }
+
+    .host-nymph {
+        width: clamp(58px, 12vw, 94px);
+        opacity: 0.78;
+    }
+
     .top-board {
         flex-direction: column;
         align-items: center;
@@ -489,6 +774,29 @@ body::before {
 }
 
 @media (max-width: 620px) {
+    .title-wrap {
+        padding-inline: 52px;
+    }
+
+    .host-nymphs {
+        inset: 6px 8px auto;
+        height: 92px;
+    }
+
+    .host-nymph {
+        width: 52px;
+        border-radius: 12px;
+        opacity: 0.75;
+    }
+
+    .title-art {
+        gap: 6px;
+    }
+
+    .title-medallion {
+        width: 36px;
+    }
+
     .status-row {
         flex-direction: column;
         align-items: stretch;

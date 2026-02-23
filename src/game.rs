@@ -2,6 +2,9 @@ use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_chacha::ChaCha20Rng;
 
+pub const HARD_DRAW_COUNT: usize = 3;
+pub const EASY_DRAW_COUNT: usize = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Suit {
     Clubs,
@@ -96,6 +99,7 @@ pub struct GameState {
     pub waste: Vec<Card>,
     pub foundations: [Vec<Card>; 4],
     pub tableau: [Vec<TableauCard>; 7],
+    pub draw_count: usize,
     pub selected: Option<Selection>,
     pub moves: usize,
     pub temple_gold: usize,
@@ -110,14 +114,19 @@ impl Default for GameState {
 
 impl GameState {
     pub fn new_shuffled() -> Self {
+        Self::new_shuffled_with_draw_count(HARD_DRAW_COUNT)
+    }
+
+    pub fn new_shuffled_with_draw_count(draw_count: usize) -> Self {
+        let draw_count = sanitize_draw_count(draw_count);
         let mut deck = full_deck();
         shuffle_deck(&mut deck);
 
         let mut tableau: [Vec<TableauCard>; 7] = std::array::from_fn(|_| Vec::new());
-        for pile in 0..7 {
+        for (pile, pile_cards) in tableau.iter_mut().enumerate() {
             for row in 0..=pile {
                 let card = deck.pop().expect("deck should have enough cards for deal");
-                tableau[pile].push(TableauCard {
+                pile_cards.push(TableauCard {
                     card,
                     face_up: row == pile,
                     zeus_revealed: false,
@@ -130,6 +139,7 @@ impl GameState {
             waste: Vec::new(),
             foundations: std::array::from_fn(|_| Vec::new()),
             tableau,
+            draw_count,
             selected: None,
             moves: 0,
             temple_gold: 0,
@@ -143,6 +153,7 @@ impl GameState {
             waste: Vec::new(),
             foundations: std::array::from_fn(|_| Vec::new()),
             tableau: std::array::from_fn(|_| Vec::new()),
+            draw_count: HARD_DRAW_COUNT,
             selected: None,
             moves: 0,
             temple_gold: 0,
@@ -150,10 +161,23 @@ impl GameState {
         }
     }
 
+    pub fn set_draw_count(&mut self, draw_count: usize) {
+        self.draw_count = sanitize_draw_count(draw_count);
+    }
+
     pub fn draw_or_recycle(&mut self) {
         self.selected = None;
-        if let Some(card) = self.stock.pop() {
+
+        let mut drew_any = false;
+        for _ in 0..self.draw_count {
+            let Some(card) = self.stock.pop() else {
+                break;
+            };
+            drew_any = true;
             self.waste.push(card);
+        }
+
+        if drew_any {
             self.moves += 1;
             return;
         }
@@ -425,16 +449,24 @@ impl GameState {
     }
 
     fn flip_tableau_top(&mut self, pile: usize) {
-        if let Some(top) = self.tableau[pile].last_mut() {
-            if !top.face_up {
-                top.face_up = true;
-                top.zeus_revealed = false;
-            }
+        if let Some(top) = self.tableau[pile].last_mut()
+            && !top.face_up
+        {
+            top.face_up = true;
+            top.zeus_revealed = false;
         }
     }
 
     fn refresh_win(&mut self) {
         self.won = self.foundations.iter().all(|pile| pile.len() == 13);
+    }
+}
+
+fn sanitize_draw_count(draw_count: usize) -> usize {
+    if draw_count <= EASY_DRAW_COUNT {
+        EASY_DRAW_COUNT
+    } else {
+        HARD_DRAW_COUNT
     }
 }
 
@@ -680,6 +712,38 @@ mod tests {
         assert_eq!(game.temple_gold, 1);
         assert_eq!(game.stock.len(), 2);
         assert!(game.waste.is_empty());
+    }
+
+    #[test]
+    fn hard_mode_draws_three_cards_from_stock() {
+        let mut game = GameState::empty();
+        game.stock = vec![
+            c(1, Suit::Clubs),
+            c(2, Suit::Clubs),
+            c(3, Suit::Clubs),
+            c(4, Suit::Clubs),
+        ];
+
+        game.draw_or_recycle();
+
+        assert_eq!(game.draw_count, HARD_DRAW_COUNT);
+        assert_eq!(game.stock.len(), 1);
+        assert_eq!(game.waste.len(), 3);
+        assert_eq!(game.moves, 1);
+    }
+
+    #[test]
+    fn easy_mode_draws_one_card_from_stock() {
+        let mut game = GameState::empty();
+        game.set_draw_count(EASY_DRAW_COUNT);
+        game.stock = vec![c(1, Suit::Spades), c(2, Suit::Spades), c(3, Suit::Spades)];
+
+        game.draw_or_recycle();
+
+        assert_eq!(game.draw_count, EASY_DRAW_COUNT);
+        assert_eq!(game.stock.len(), 2);
+        assert_eq!(game.waste.len(), 1);
+        assert_eq!(game.moves, 1);
     }
 
     #[test]

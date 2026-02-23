@@ -666,6 +666,7 @@ name = "solitare"
 version = "0.1.0"
 dependencies = [
  "getrandom",
+ "gloo-timers",
  "js-sys",
  "log",
  "rand",

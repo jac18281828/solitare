@@ -1,5 +1,6 @@
+use gloo_timers::callback::Timeout;
 use log::info;
-use solitare::game::{Card, GameState, Selection};
+use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection};
 use yew::events::MouseEvent;
 use yew::{Component, Context, Html, Renderer, classes, html};
 
@@ -7,6 +8,7 @@ use yew::{Component, Context, Html, Renderer, classes, html};
 enum EndState {
     ZeusThunder,
     OutOfGold,
+    Victory,
 }
 
 pub struct App {
@@ -14,6 +16,9 @@ pub struct App {
     status: String,
     end_state: Option<EndState>,
     help_expanded: bool,
+    victory_gold_award: usize,
+    all_to_temple_running: bool,
+    all_to_temple_timeout: Option<Timeout>,
 }
 
 pub enum Msg {
@@ -27,12 +32,18 @@ pub enum Msg {
     DoubleClickTableauCard(usize, usize),
     ClickTableauPile(usize),
     AutoFoundation,
-    ClearSelection,
+    AllToTemple,
+    AllToTempleStep,
     ZeusVision,
+    EnableEasyMode,
     ToggleHelp,
 }
 
 impl App {
+    fn interactions_locked(&self) -> bool {
+        self.end_state.is_some() || self.all_to_temple_running
+    }
+
     fn describe_card(card: Card) -> String {
         format!("{}{}", card.rank_label(), card.suit.symbol())
     }
@@ -51,18 +62,43 @@ impl App {
         }
 
         for pile in 0..self.game.tableau.len() {
-            if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1) {
-                if self.game.tableau[pile][top_index].face_up {
-                    let _ = self.game.select_tableau(pile, top_index);
-                    if self.game.move_selected_to_any_foundation() {
-                        return true;
-                    }
-                    self.game.clear_selection();
+            if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
+                && self.game.tableau[pile][top_index].face_up
+            {
+                let _ = self.game.select_tableau(pile, top_index);
+                if self.game.move_selected_to_any_foundation() {
+                    return true;
                 }
+                self.game.clear_selection();
             }
         }
 
         false
+    }
+
+    fn schedule_all_to_temple_step(&mut self, ctx: &Context<Self>) {
+        let link = ctx.link().clone();
+        self.all_to_temple_timeout = Some(Timeout::new(110, move || {
+            link.send_message(Msg::AllToTempleStep);
+        }));
+    }
+
+    fn stop_all_to_temple(&mut self) {
+        self.all_to_temple_running = false;
+        self.all_to_temple_timeout = None;
+    }
+
+    fn trigger_victory(&mut self) {
+        if matches!(self.end_state, Some(EndState::Victory)) {
+            return;
+        }
+
+        let reward = self.game.temple_gold;
+        self.game.temple_gold = 0;
+        self.victory_gold_award = reward;
+        self.end_state = Some(EndState::Victory);
+        self.stop_all_to_temple();
+        self.status = format!("Dionysus honors you with {reward} gold.");
     }
 
     fn view_face_card(
@@ -84,6 +120,13 @@ impl App {
         if zeus_revealed {
             card_classes.push("zeus-revealed");
         }
+        let center_art = if matches!(card.rank, 11..=13) {
+            "art-dionysus"
+        } else if card.rank == 1 {
+            "art-temple"
+        } else {
+            "art-laurel"
+        };
 
         html! {
             <button
@@ -92,13 +135,14 @@ impl App {
                 onclick={on_click}
                 ondblclick={on_double_click}
                 aria-label={format!("{} of {}", card.rank_label(), card.suit.latin_name())}
-                disabled={self.end_state.is_some()}
+                disabled={self.interactions_locked()}
             >
                 <span class="corner top">
                     <span class="rank">{ card.rank_label() }</span>
                     <span class="suit">{ card.suit.symbol() }</span>
                 </span>
                 <span class="center">
+                    <span class={classes!("center-art", center_art)} aria-hidden="true"></span>
                     <span class="glyph">{ card.suit.symbol() }</span>
                     <span class="motif">{ card.motif() }</span>
                 </span>
@@ -127,7 +171,7 @@ impl App {
                 class={card_classes}
                 onclick={on_click}
                 aria-label={label}
-                disabled={self.end_state.is_some()}
+                disabled={self.interactions_locked()}
             >
                 <span class="back-medallion" aria-hidden="true"></span>
             </button>
@@ -148,7 +192,7 @@ impl App {
                     class={classes!("pile-empty", selected.then_some("selected"))}
                     onclick={on_click}
                     aria-label={format!("Foundation {}", pile + 1)}
-                    disabled={self.end_state.is_some()}
+                    disabled={self.interactions_locked()}
                 >
                     <span>{ "TEMPLE" }</span>
                     <span class="tiny">{ "ACE UP" }</span>
@@ -168,16 +212,22 @@ impl Component for App {
             status: "Draw from stock and build the four temples from Ace to King.".to_string(),
             end_state: None,
             help_expanded: false,
+            victory_gold_award: 0,
+            all_to_temple_running: false,
+            all_to_temple_timeout: None,
         }
     }
 
-    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
-        if self.end_state.is_some() && !matches!(msg, Msg::Noop | Msg::NewGame) {
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+        if self.end_state.is_some() && !matches!(msg, Msg::Noop | Msg::NewGame | Msg::ToggleHelp) {
             self.status = match self.end_state {
                 Some(EndState::ZeusThunder) => "Zeus' Thunder is heard".to_string(),
                 Some(EndState::OutOfGold) => {
-                    "Temple Gold has run out. You lose. Final vision reveals all cards."
-                        .to_string()
+                    "Temple Gold has run out. You lose. Final vision reveals all cards.".to_string()
+                }
+                Some(EndState::Victory) => {
+                    let victory_gold_award = self.victory_gold_award;
+                    format!("Dionysus honors you with {victory_gold_award} gold.")
                 }
                 None => self.status.clone(),
             };
@@ -187,23 +237,28 @@ impl Component for App {
         match msg {
             Msg::Noop => return false,
             Msg::NewGame => {
-                self.game = GameState::new_shuffled();
+                let draw_count = self.game.draw_count;
+                self.game = GameState::new_shuffled_with_draw_count(draw_count);
+                self.stop_all_to_temple();
                 self.end_state = None;
+                self.victory_gold_award = 0;
                 self.status = "You gave up. A fresh deck has been dealt.".to_string();
             }
             Msg::DrawStock => {
                 let had_stock = !self.game.stock.is_empty();
                 let had_waste = !self.game.waste.is_empty();
+                let waste_before = self.game.waste.len();
                 let gold_before = self.game.temple_gold;
                 self.game.draw_or_recycle();
                 self.status = if had_stock {
-                    "Drew one card to the waste pile.".to_string()
+                    let drawn = self.game.waste.len().saturating_sub(waste_before);
+                    let suffix = if drawn == 1 { "" } else { "s" };
+                    format!("Drew {drawn} card{suffix} to the waste pile.")
                 } else if had_waste {
                     let collected = gold_before.saturating_sub(self.game.temple_gold);
                     if collected > 0 {
                         format!(
-                            "Recycled waste back into stock. Temple collected {} gold.",
-                            collected
+                            "Recycled waste back into stock. Temple collected {collected} gold."
                         )
                     } else {
                         "Recycled waste back into stock.".to_string()
@@ -214,6 +269,7 @@ impl Component for App {
 
                 if !had_stock && had_waste && self.game.temple_gold == 0 {
                     self.game.zeus_vision();
+                    self.stop_all_to_temple();
                     self.end_state = Some(EndState::OutOfGold);
                     self.status =
                         "Temple Gold has run out. You lose. Final vision reveals all cards."
@@ -316,15 +372,12 @@ impl Component for App {
                         self.status =
                             "Only a King can move into an empty tableau column.".to_string();
                     }
-                } else if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1) {
-                    if self.game.tableau[pile][top_index].face_up
-                        && self.game.select_tableau(pile, top_index)
-                    {
-                        if let Some(card) = self.game.selected_card() {
-                            self.status =
-                                format!("Selected top card {}.", Self::describe_card(card));
-                        }
-                    }
+                } else if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
+                    && self.game.tableau[pile][top_index].face_up
+                    && self.game.select_tableau(pile, top_index)
+                    && let Some(card) = self.game.selected_card()
+                {
+                    self.status = format!("Selected top card {}.", Self::describe_card(card));
                 }
             }
             Msg::AutoFoundation => {
@@ -334,14 +387,54 @@ impl Component for App {
                     self.status = "No automatic foundation move available.".to_string();
                 }
             }
-            Msg::ClearSelection => {
+            Msg::AllToTemple => {
+                if self.all_to_temple_running {
+                    return false;
+                }
+
                 self.game.clear_selection();
-                self.status = "Selection cleared.".to_string();
+                if self.try_auto_foundation() {
+                    if self.game.won {
+                        self.trigger_victory();
+                    } else {
+                        self.all_to_temple_running = true;
+                        self.status = "All available cards are marching to the temple.".to_string();
+                        self.schedule_all_to_temple_step(ctx);
+                    }
+                } else {
+                    self.status = "No automatic temple moves available.".to_string();
+                }
+            }
+            Msg::AllToTempleStep => {
+                self.all_to_temple_timeout = None;
+                if !self.all_to_temple_running {
+                    return false;
+                }
+
+                if self.try_auto_foundation() {
+                    if self.game.won {
+                        self.trigger_victory();
+                    } else {
+                        self.schedule_all_to_temple_step(ctx);
+                    }
+                } else {
+                    self.stop_all_to_temple();
+                    self.status = "All possible cards have been moved to temple.".to_string();
+                }
             }
             Msg::ZeusVision => {
+                self.stop_all_to_temple();
                 self.game.zeus_vision();
                 self.end_state = Some(EndState::ZeusThunder);
                 self.status = "Zeus' Thunder is heard".to_string();
+            }
+            Msg::EnableEasyMode => {
+                if self.game.draw_count == EASY_DRAW_COUNT {
+                    self.status = "Easy mode is already active.".to_string();
+                } else {
+                    self.game.set_draw_count(EASY_DRAW_COUNT);
+                    self.status = "Easy mode enabled: draw 1 card from stock.".to_string();
+                }
             }
             Msg::ToggleHelp => {
                 self.help_expanded = !self.help_expanded;
@@ -354,7 +447,7 @@ impl Component for App {
         }
 
         if self.game.won && self.end_state.is_none() {
-            self.status = "Victory for Olympus! All four foundations are complete.".to_string();
+            self.trigger_victory();
         }
 
         true
@@ -364,12 +457,25 @@ impl Component for App {
         let draw_stock = ctx.link().callback(|_| Msg::DrawStock);
         let new_game = ctx.link().callback(|_| Msg::NewGame);
         let auto_foundation = ctx.link().callback(|_| Msg::AutoFoundation);
-        let clear_selection = ctx.link().callback(|_| Msg::ClearSelection);
+        let all_to_temple = ctx.link().callback(|_| Msg::AllToTemple);
         let zeus_vision = ctx.link().callback(|_| Msg::ZeusVision);
+        let enable_easy_mode = ctx.link().callback(|_| Msg::EnableEasyMode);
         let toggle_help = ctx.link().callback(|_| Msg::ToggleHelp);
         let click_waste = ctx.link().callback(|_| Msg::ClickWaste);
         let double_click_waste = ctx.link().callback(|_| Msg::DoubleClickWaste);
         let locked = self.end_state.is_some();
+        let actions_busy = self.all_to_temple_running;
+        let easy_mode_active = self.game.draw_count == EASY_DRAW_COUNT;
+        let mode_label = if self.game.draw_count == HARD_DRAW_COUNT {
+            "Hard (Draw 3)"
+        } else {
+            "Easy (Draw 1)"
+        };
+        let reset_label = if matches!(self.end_state, Some(EndState::Victory)) {
+            "Play Again"
+        } else {
+            "Give Up!"
+        };
         let help_button_label = if self.help_expanded {
             "Minimize Help"
         } else {
@@ -504,28 +610,57 @@ impl Component for App {
             })
             .collect::<Html>();
 
+        let victory_gold_animation = if matches!(self.end_state, Some(EndState::Victory)) {
+            (0..18)
+                .map(|idx| {
+                    html! {
+                        <span class="victory-coin" style={format!("--coin-index: {idx};")}></span>
+                    }
+                })
+                .collect::<Html>()
+        } else {
+            Html::default()
+        };
+
         html! {
             <main class={classes!(
                 "app-shell",
                 matches!(self.end_state, Some(EndState::ZeusThunder)).then_some("thunder-ended"),
                 matches!(self.end_state, Some(EndState::OutOfGold)).then_some("gold-ended"),
+                matches!(self.end_state, Some(EndState::Victory)).then_some("victory-ended"),
             )}>
+                <div class="victory-coins" aria-hidden="true">{ victory_gold_animation }</div>
+                <div class="felt-art" aria-hidden="true"></div>
+                <div class="host-nymphs" aria-hidden="true">
+                    <span class={classes!("host-nymph", "left", "art-nymph-blonde")}></span>
+                    <span class={classes!("host-nymph", "right", "art-nymph-brunette")}></span>
+                </div>
+                <div class={classes!("victory-temple", "art-temple-with-coin")} aria-hidden="true"></div>
                 <header class="title-wrap">
+                    <div class="title-art" aria-hidden="true">
+                        <span class={classes!("title-medallion", "art-laurel")}></span>
+                        <span class={classes!("title-medallion", "art-dionysus")}></span>
+                        <span class={classes!("title-medallion", "art-temple")}></span>
+                    </div>
                     <h1>{ "Solitare of Olympus" }</h1>
                     <p>{ "Play cards with Cupid, ivy, Bacchus, and temple gold." }</p>
                 </header>
 
                 <section class="control-row">
-                    <button type="button" onclick={new_game}>{ "Give Up!" }</button>
-                    <button type="button" onclick={auto_foundation} disabled={locked}>{ "Auto To Temple" }</button>
-                    <button type="button" onclick={clear_selection} disabled={locked}>{ "Clear Selection" }</button>
-                    <button type="button" onclick={zeus_vision} disabled={locked}>{ "Zeus' Vision" }</button>
+                    <button type="button" onclick={new_game}>{ reset_label }</button>
+                    <button type="button" onclick={enable_easy_mode} disabled={locked || actions_busy || easy_mode_active}>
+                        { if easy_mode_active { "Easy Mode Active" } else { "Switch To Easy" } }
+                    </button>
+                    <button type="button" onclick={auto_foundation} disabled={locked || actions_busy}>{ "Auto To Temple" }</button>
+                    <button type="button" onclick={all_to_temple} disabled={locked || actions_busy}>{ "All To Temple" }</button>
+                    <button type="button" onclick={zeus_vision} disabled={locked || actions_busy}>{ "Zeus' Vision" }</button>
                     <button type="button" class="help-toggle-btn" onclick={toggle_help}>{ help_button_label }</button>
                 </section>
 
                 <section class="status-row">
                     <div class="status-pill">{ format!("Moves: {}", self.game.moves) }</div>
                     <div class="status-pill">{ format!("Temple Gold: {}", self.game.temple_gold) }</div>
+                    <div class="status-pill">{ format!("Mode: {}", mode_label) }</div>
                     <div class="status-text">{ &self.status }</div>
                 </section>
 
@@ -556,6 +691,7 @@ impl Component for App {
                     <span>{ "Double-click waste/top tableau card to send it to a temple." }</span>
                     <span>{ "Build tableau in descending alternating colors." }</span>
                     <span>{ "Zeus' Vision reveals hidden cards and ends the game." }</span>
+                    <span>{ "All To Temple auto-runs endgame moves until no temple move remains." }</span>
                 </section>
             </main>
         }
