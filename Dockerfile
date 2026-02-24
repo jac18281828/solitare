@@ -1,11 +1,14 @@
-FROM mcr.microsoft.com/devcontainers/rust:1-1-bookworm
+FROM ghcr.io/jac18281828/rust:latest
 
-ARG USERNAME=vscode
 ARG PROJECT=solitare
-
 WORKDIR /workspaces/${PROJECT}
 
-RUN su ${USERNAME} -c "rustup target add wasm32-unknown-unknown" \
-    && su ${USERNAME} -c "cargo install trunk --locked"
+USER rust
+ENV USER=rust
+ENV PATH=/home/${USER}/.cargo/bin:${PATH}::/usr/local/go/bin
+# source $HOME/.cargo/env
 
-ENV PATH=/home/${USERNAME}/.cargo/bin:${PATH}
+RUN cargo install trunk && \
+    rustup target add wasm32-unknown-unknown
+
+COPY --chown=rust:rust . .
