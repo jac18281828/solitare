@@ -13,8 +13,6 @@ concurrency:
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
-  CARGO_NET_RETRY: "5"
-  CARGO_HTTP_TIMEOUT: "120"
   S3_BUCKET_NAME: "solitare-us-east-2-504242000181"
   AWS_REGION: "us-east-2"
   SITE_URL: "https://solitare.2ad.com"
@@ -50,22 +48,17 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Install Trunk and Wasm
         run: |
-          retry() {
-            n=0
-            until "$@"; do
-              n=$((n + 1))
-              if [ "$n" -ge 3 ]; then
-                echo "Command failed after ${n} attempts: $*"
-                return 1
-              fi
-              sleep $((n * 5))
-            done
-          }
-
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
-          retry cargo install trunk --locked
-          retry cargo install wasm-bindgen-cli --locked
+
+          if ! command -v trunk >/dev/null 2>&1; then
+            cargo install trunk --locked
+          fi
+
+          if ! command -v wasm-bindgen >/dev/null 2>&1; then
+            cargo install wasm-bindgen-cli --locked
+          fi
+
           trunk --version
           wasm-bindgen --version
       - name: Rust Build and Check
