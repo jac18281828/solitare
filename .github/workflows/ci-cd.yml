@@ -31,7 +31,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Install trunk
-        run: cargo install trunk --locked
+        run: |
+          if ! command -v trunk >/dev/null 2>&1; then
+            cargo install trunk --locked
+          fi
+          trunk --version
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
