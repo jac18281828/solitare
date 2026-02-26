@@ -12,6 +12,7 @@ concurrency:
   group: "deploy-static-site-${{ github.ref }}"
   cancel-in-progress: true
 env:
+  CARGO_TERM_COLOR: always
   S3_BUCKET_NAME: "solitare-us-east-2-504242000181"
   AWS_REGION: "us-east-2"
   SITE_URL: "https://solitare.2ad.com"
@@ -43,16 +44,18 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Install Trunk and Wasm
         run: |
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
-          cargo install trunk wasm-bindgen-cli
+          cargo install trunk wasm-bindgen-cli --locked
       - name: Rust Build and Check
         run: |
           cargo fmt --check
-          cargo clippy --all-features --no-deps -- -D warnings
-          cargo test
+          cargo clippy --all-features --all-targets --no-deps -- -D warnings
+          cargo test --release
       - name: Build Artifact
         run: |
           trunk build --release --public-url ${{ env.SITE_URL }}
