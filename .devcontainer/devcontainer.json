@@ -29,5 +29,5 @@
             "onAutoForward": "openBrowser"
         }
     },
-    "remoteUser": "vscode"
+    "remoteUser": "rust"
 }

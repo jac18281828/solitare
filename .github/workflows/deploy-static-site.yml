@@ -1,0 +1,99 @@
+name: Build and Deploy Static Site
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: "deploy-static-site-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  S3_BUCKET_NAME: "solitare-us-east-2-504242000181"
+  AWS_REGION: "us-east-2"
+  SITE_URL: "https://solitare.2ad.com"
+  CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          audience: sts.amazonaws.com
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::504242000181:role/GithubDeployCI
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Trunk and Wasm
+        run: |
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+          cargo install trunk wasm-bindgen-cli
+
+      - name: Rust Build and Check
+        run: |
+          cargo fmt --check
+          cargo clippy --all-features --no-deps -- -D warnings
+          cargo test
+
+      - name: Build Artifact
+        run: |
+          trunk build --release --public-url ${{ env.SITE_URL }}
+
+      - name: Sync S3 Bucket
+        run: |
+          aws s3 sync ./dist s3://${S3_BUCKET_NAME} --delete --region ${{ env.AWS_REGION }}
+
+      - name: Set HTML no-cache headers
+        run: |
+          aws s3 cp ./dist/index.html s3://${S3_BUCKET_NAME}/index.html \
+            --region ${{ env.AWS_REGION }} \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "text/html; charset=utf-8"
+
+      - name: Invalidate CloudFront cache
+        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
