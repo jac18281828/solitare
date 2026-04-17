@@ -34,12 +34,12 @@ Ancient Greek and Roman themed Klondike solitaire built with Rust + Yew + WebAss
 
 This repo includes a complete dev container setup:
 
-- Dev container config: `/Users/john/sandbox/solitare/.devcontainer/devcontainer.json`
-- Dockerfile used by the container build: `/Users/john/sandbox/solitare/Dockerfile`
+- Dev container config: `.devcontainer/devcontainer.json`
+- Dockerfile used by the container build: `Dockerfile`
 
 Start steps:
 
-1. Open `/Users/john/sandbox/solitare` in VS Code.
+1. Open the repo root in VS Code.
 2. Run `Dev Containers: Reopen in Container`.
 3. In the container terminal run `trunk serve --release`.
 4. Open `http://127.0.0.1:8080`.
@@ -47,7 +47,7 @@ Start steps:
 ## Production Deploy (S3 + CloudFront)
 
 This repo includes a deploy workflow at:
-- `/Users/john/sandbox/solitare/.github/workflows/deploy-static-site.yml`
+- `.github/workflows/deploy-static-site.yml`
 
 Deployment target settings:
 - `SITE_URL`: `https://solitare.2ad.com`

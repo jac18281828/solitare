@@ -39,7 +39,6 @@ impl Suit {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Card {
-    pub id: u8,
     pub suit: Suit,
     pub rank: u8,
 }
@@ -488,12 +487,10 @@ fn can_place_on_tableau(card: Card, pile: &[TableauCard]) -> bool {
 fn full_deck() -> Vec<Card> {
     let mut deck = Vec::with_capacity(52);
     let suits = [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades];
-    let mut id: u8 = 0;
 
     for suit in suits {
         for rank in 1..=13 {
-            deck.push(Card { id, suit, rank });
-            id = id.saturating_add(1);
+            deck.push(Card { suit, rank });
         }
     }
 
@@ -549,7 +546,7 @@ mod tests {
     use super::*;
 
     fn c(rank: u8, suit: Suit) -> Card {
-        Card { id: 0, rank, suit }
+        Card { rank, suit }
     }
 
     #[test]
