@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-  packages: write
   id-token: write
 concurrency:
   group: "deploy-static-site-${{ github.ref }}"
