@@ -418,10 +418,9 @@ impl GameState {
             }
             Selection::Tableau { pile, index } => {
                 let moved: Vec<TableauCard> = self.tableau[pile].drain(index..).collect();
-                let moved_count = moved.len();
                 self.tableau[target].extend(moved);
                 self.flip_tableau_top(pile);
-                moved_count
+                0
             }
         };
 
@@ -675,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn temple_gold_increases_on_tableau_run_move() {
+    fn tableau_to_tableau_move_awards_no_gold() {
         let mut game = GameState::empty();
         game.tableau[0] = vec![
             TableauCard {
@@ -697,7 +696,7 @@ mod tests {
 
         assert!(game.select_tableau(0, 0));
         assert!(game.move_selected_to_tableau(1));
-        assert_eq!(game.temple_gold, 2);
+        assert_eq!(game.temple_gold, 0);
     }
 
     #[test]
