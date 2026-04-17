@@ -508,7 +508,7 @@ fn shuffle_deck(deck: &mut [Card]) {
 
 fn secure_seed() -> [u8; 32] {
     let mut seed = [0_u8; 32];
-    if getrandom::getrandom(&mut seed).is_ok() {
+    if getrandom::fill(&mut seed).is_ok() {
         return seed;
     }
 

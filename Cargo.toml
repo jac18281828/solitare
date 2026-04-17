@@ -13,8 +13,7 @@ yew = { version = "0.22.0", features = ["csr"] }
 js-sys = "0.3.90"
 rand = "0.10.0"
 rand_chacha = "0.10.0"
-getrandom = { version = "0.2.15", features = ["js"] }
-getrandom_04 = { package = "getrandom", version = "0.4.1", features = ["wasm_js"] }
+getrandom = { version = "0.4.1", features = ["wasm_js"] }
 gloo-timers = "0.3.0"
 
 [profile.release]
