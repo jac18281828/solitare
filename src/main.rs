@@ -693,6 +693,7 @@ impl Component for App {
                     <span>{ "Zeus' Vision reveals hidden cards and ends the game." }</span>
                     <span>{ "All To Temple auto-runs endgame moves until no temple move remains." }</span>
                 </section>
+                <span class="version-tag" aria-hidden="true">{ concat!("v", env!("CARGO_PKG_VERSION")) }</span>
             </main>
         }
     }
