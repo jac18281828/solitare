@@ -30,10 +30,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::504242000181:role/GithubDeployCI
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          profile: minimal
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -48,9 +48,6 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Install Trunk and Wasm
         run: |
-          rustup component add rustfmt clippy
-          rustup target add wasm32-unknown-unknown
-
           if ! command -v trunk >/dev/null 2>&1; then
             cargo install trunk --locked
           fi
