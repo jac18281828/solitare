@@ -197,6 +197,14 @@ body::before {
     opacity: 0.54;
 }
 
+.lost .felt-art {
+    opacity: 0.12;
+}
+
+.lost .host-nymphs {
+    opacity: 0.18;
+}
+
 .lost .tableau-scroll,
 .lost .top-board,
 .lost .status-row {
