@@ -7,6 +7,25 @@ use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::MouseEvent;
 use yew::{Component, Context, Html, Renderer, classes, html};
 
+const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+fn load_temple_gold() -> usize {
+    local_storage()
+        .and_then(|s| s.get_item(TEMPLE_GOLD_STORAGE_KEY).ok().flatten())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+fn persist_temple_gold(value: usize) {
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(TEMPLE_GOLD_STORAGE_KEY, &value.to_string());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EndState {
     ZeusThunder,
@@ -79,7 +98,6 @@ impl App {
         }
 
         let reward = self.game.temple_gold;
-        self.game.temple_gold = 0;
         self.victory_gold_award = reward;
         self.end_state = Some(EndState::Victory);
         self.stop_all_to_temple();
@@ -192,8 +210,10 @@ impl Component for App {
     type Properties = ();
 
     fn create(_: &Context<Self>) -> Self {
+        let mut game = GameState::new_shuffled();
+        game.temple_gold = load_temple_gold();
         Self {
-            game: GameState::new_shuffled(),
+            game,
             status: "Draw from stock and build the four temples from Ace to King.".to_string(),
             end_state: None,
             help_expanded: false,
@@ -281,8 +301,14 @@ impl Component for App {
         match msg {
             Msg::Noop => return false,
             Msg::NewGame => {
+                let carry_gold = if matches!(self.end_state, Some(EndState::Victory)) {
+                    self.game.temple_gold
+                } else {
+                    0
+                };
                 let draw_count = self.game.draw_count;
                 self.game = GameState::new_shuffled_with_draw_count(draw_count);
+                self.game.temple_gold = carry_gold;
                 self.stop_all_to_temple();
                 self.end_state = None;
                 self.victory_gold_award = 0;
@@ -470,6 +496,7 @@ impl Component for App {
             Msg::ZeusVision => {
                 self.stop_all_to_temple();
                 self.game.zeus_vision();
+                self.game.temple_gold = 0;
                 self.end_state = Some(EndState::ZeusThunder);
                 self.status = "Zeus' Thunder is heard".to_string();
             }
@@ -510,10 +537,12 @@ impl Component for App {
         if self.end_state.is_none() && !self.game.has_any_legal_move() {
             self.stop_all_to_temple();
             self.game.zeus_vision();
+            self.game.temple_gold = 0;
             self.end_state = Some(EndState::Stalemate);
             self.status = "Zeus demands obeisance! Only surrender remains.".to_string();
         }
 
+        persist_temple_gold(self.game.temple_gold);
         true
     }
 
