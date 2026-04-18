@@ -756,13 +756,14 @@ body::before {
 
 .version-tag {
     position: absolute;
-    right: 10px;
-    bottom: 4px;
+    right: 18px;
+    bottom: 14px;
     z-index: 2;
     pointer-events: none;
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.32);
+    color: rgba(255, 255, 255, 0.55);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
     font-variant-numeric: tabular-nums;
 }
 
