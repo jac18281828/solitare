@@ -12,6 +12,13 @@ enum EndState {
     ZeusThunder,
     OutOfGold,
     Victory,
+    Stalemate,
+}
+
+impl EndState {
+    fn is_loss(self) -> bool {
+        matches!(self, Self::ZeusThunder | Self::OutOfGold | Self::Stalemate)
+    }
 }
 
 pub struct App {
@@ -263,6 +270,9 @@ impl Component for App {
                     let victory_gold_award = self.victory_gold_award;
                     format!("Dionysus honors you with {victory_gold_award} gold.")
                 }
+                Some(EndState::Stalemate) => {
+                    "Zeus demands obeisance! Only surrender remains.".to_string()
+                }
                 None => self.status.clone(),
             };
             return true;
@@ -497,6 +507,12 @@ impl Component for App {
         if self.game.won && self.end_state.is_none() {
             self.trigger_victory();
         }
+        if self.end_state.is_none() && !self.game.has_any_legal_move() {
+            self.stop_all_to_temple();
+            self.game.zeus_vision();
+            self.end_state = Some(EndState::Stalemate);
+            self.status = "Zeus demands obeisance! Only surrender remains.".to_string();
+        }
 
         true
     }
@@ -676,8 +692,11 @@ impl Component for App {
         html! {
             <main class={classes!(
                 "app-shell",
+                self.end_state.is_some().then_some("ended"),
+                self.end_state.is_some_and(EndState::is_loss).then_some("lost"),
                 matches!(self.end_state, Some(EndState::ZeusThunder)).then_some("thunder-ended"),
                 matches!(self.end_state, Some(EndState::OutOfGold)).then_some("gold-ended"),
+                matches!(self.end_state, Some(EndState::Stalemate)).then_some("stalemate-ended"),
                 matches!(self.end_state, Some(EndState::Victory)).then_some("victory-ended"),
             )} onclick={dismiss_victory_rain}>
                 <div class="victory-coins" aria-hidden="true">{ victory_gold_animation }</div>

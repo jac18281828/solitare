@@ -334,6 +334,69 @@ impl GameState {
         best.map(|(_, source)| source)
     }
 
+    /// Whether any legal move currently exists. A "move" that only shuffles
+    /// a whole column onto an empty column is excluded as degenerate — it
+    /// doesn't change observable state and would otherwise let the detector
+    /// claim progress is possible when the player is truly stuck.
+    pub fn has_any_legal_move(&self) -> bool {
+        if !self.stock.is_empty() {
+            return true;
+        }
+        if !self.waste.is_empty() && self.temple_gold > 0 {
+            return true;
+        }
+
+        if let Some(card) = self.waste.last().copied() {
+            if self.can_promote_to_foundation(card) {
+                return true;
+            }
+            for pile in &self.tableau {
+                if can_place_on_tableau(card, pile) {
+                    return true;
+                }
+            }
+        }
+
+        for (src_pile, cards) in self.tableau.iter().enumerate() {
+            for (index, slot) in cards.iter().enumerate() {
+                if !slot.face_up || !self.can_select_tableau(src_pile, index) {
+                    continue;
+                }
+                let head = slot.card;
+                for (dst_pile, dst) in self.tableau.iter().enumerate() {
+                    if dst_pile == src_pile || !can_place_on_tableau(head, dst) {
+                        continue;
+                    }
+                    if index == 0 && dst.is_empty() {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        }
+
+        for cards in &self.tableau {
+            if let Some(top) = cards.last()
+                && top.face_up
+                && self.can_promote_to_foundation(top.card)
+            {
+                return true;
+            }
+        }
+
+        for pile in &self.foundations {
+            if let Some(top) = pile.last().copied() {
+                for dst in &self.tableau {
+                    if can_place_on_tableau(top, dst) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// Promote the lowest-rank eligible card to a foundation using
     /// [`lowest_promotable_source`]. Returns true when a card moved.
     ///
@@ -906,6 +969,90 @@ mod tests {
 
         assert!(!game.auto_promote_lowest());
         assert_eq!(game.waste.len(), 1);
+    }
+
+    #[test]
+    fn has_any_legal_move_true_when_stock_non_empty() {
+        let mut game = GameState::empty();
+        game.stock.push(c(5, Suit::Hearts));
+        assert!(game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_true_when_recycle_available_with_gold() {
+        let mut game = GameState::empty();
+        game.waste.push(c(5, Suit::Hearts));
+        game.temple_gold = 1;
+        assert!(game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_false_when_recycle_would_bankrupt() {
+        // Waste exists but gold is 0: recycle would trigger out-of-gold, not
+        // a real move. No other legal action either.
+        let mut game = GameState::empty();
+        game.waste.push(c(5, Suit::Hearts));
+        game.temple_gold = 0;
+        assert!(!game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_false_on_stalemate_fixture() {
+        // Hand-crafted stalemate: lone mid-rank face-up card with no
+        // foundation (needs rank 1) or tableau destination (needs a King
+        // for empty piles, or opposite-color rank+1 otherwise).
+        let mut game = GameState::empty();
+        game.tableau[0] = vec![TableauCard {
+            card: c(7, Suit::Hearts),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+        assert!(!game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_excludes_whole_king_column_to_empty_swap() {
+        // A lone King in its own column could legally go to any empty
+        // column, but that swap changes no observable state. Must not
+        // count as a move, otherwise the detector never fires on boards
+        // where only pointless reshuffles remain.
+        let mut game = GameState::empty();
+        game.tableau[0] = vec![TableauCard {
+            card: c(13, Suit::Spades),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+        assert!(!game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_true_when_tableau_top_promotable() {
+        let mut game = GameState::empty();
+        game.tableau[0] = vec![TableauCard {
+            card: c(1, Suit::Hearts),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+        assert!(game.has_any_legal_move());
+    }
+
+    #[test]
+    fn has_any_legal_move_true_when_foundation_card_fits_tableau() {
+        // 9♠ on foundation can drop onto 10♥/10♦ in tableau.
+        let mut game = GameState::empty();
+        game.foundations[0].push(c(1, Suit::Spades));
+        game.foundations[0].push(c(2, Suit::Spades));
+        game.foundations[0].push(c(3, Suit::Spades));
+        // ... populate up through 9
+        for rank in 4..=9 {
+            game.foundations[0].push(c(rank, Suit::Spades));
+        }
+        game.tableau[0] = vec![TableauCard {
+            card: c(10, Suit::Hearts),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+        assert!(game.has_any_legal_move());
     }
 
     #[test]

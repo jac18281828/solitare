@@ -193,8 +193,15 @@ body::before {
     border-color: rgba(236, 202, 118, 0.62);
 }
 
-.victory-ended .felt-art {
+.ended .felt-art {
     opacity: 0.54;
+}
+
+.lost .tableau-scroll,
+.lost .top-board,
+.lost .status-row {
+    filter: grayscale(0.55) brightness(0.82);
+    transition: filter 0.4s ease;
 }
 
 .victory-temple {
@@ -426,7 +433,7 @@ body::before {
     transition: opacity 0.35s ease;
 }
 
-.victory-ended .top-board::before {
+.ended .top-board::before {
     opacity: 0.22;
 }
 
