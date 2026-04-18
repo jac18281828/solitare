@@ -17,6 +17,7 @@ pub struct App {
     end_state: Option<EndState>,
     help_expanded: bool,
     victory_gold_award: usize,
+    victory_rain_dismissed: bool,
     all_to_temple_running: bool,
     all_to_temple_timeout: Option<Timeout>,
 }
@@ -37,6 +38,7 @@ pub enum Msg {
     ZeusVision,
     EnableEasyMode,
     ToggleHelp,
+    DismissVictoryRain,
 }
 
 impl App {
@@ -213,13 +215,19 @@ impl Component for App {
             end_state: None,
             help_expanded: false,
             victory_gold_award: 0,
+            victory_rain_dismissed: false,
             all_to_temple_running: false,
             all_to_temple_timeout: None,
         }
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        if self.end_state.is_some() && !matches!(msg, Msg::Noop | Msg::NewGame | Msg::ToggleHelp) {
+        if self.end_state.is_some()
+            && !matches!(
+                msg,
+                Msg::Noop | Msg::NewGame | Msg::ToggleHelp | Msg::DismissVictoryRain
+            )
+        {
             self.status = match self.end_state {
                 Some(EndState::ZeusThunder) => "Zeus' Thunder is heard".to_string(),
                 Some(EndState::OutOfGold) => {
@@ -242,6 +250,7 @@ impl Component for App {
                 self.stop_all_to_temple();
                 self.end_state = None;
                 self.victory_gold_award = 0;
+                self.victory_rain_dismissed = false;
                 self.status = "You gave up. A fresh deck has been dealt.".to_string();
             }
             Msg::DrawStock => {
@@ -444,6 +453,14 @@ impl Component for App {
                     "Help minimized.".to_string()
                 };
             }
+            Msg::DismissVictoryRain => {
+                if matches!(self.end_state, Some(EndState::Victory)) && !self.victory_rain_dismissed
+                {
+                    self.victory_rain_dismissed = true;
+                } else {
+                    return false;
+                }
+            }
         }
 
         if self.game.won && self.end_state.is_none() {
@@ -610,7 +627,9 @@ impl Component for App {
             })
             .collect::<Html>();
 
-        let victory_gold_animation = if matches!(self.end_state, Some(EndState::Victory)) {
+        let victory_rain_active =
+            matches!(self.end_state, Some(EndState::Victory)) && !self.victory_rain_dismissed;
+        let victory_gold_animation = if victory_rain_active {
             (0..18)
                 .map(|idx| {
                     html! {
@@ -621,6 +640,7 @@ impl Component for App {
         } else {
             Html::default()
         };
+        let dismiss_victory_rain = ctx.link().callback(|_| Msg::DismissVictoryRain);
 
         html! {
             <main class={classes!(
@@ -628,7 +648,7 @@ impl Component for App {
                 matches!(self.end_state, Some(EndState::ZeusThunder)).then_some("thunder-ended"),
                 matches!(self.end_state, Some(EndState::OutOfGold)).then_some("gold-ended"),
                 matches!(self.end_state, Some(EndState::Victory)).then_some("victory-ended"),
-            )}>
+            )} onclick={dismiss_victory_rain}>
                 <div class="victory-coins" aria-hidden="true">{ victory_gold_animation }</div>
                 <div class="felt-art" aria-hidden="true"></div>
                 <div class="host-nymphs" aria-hidden="true">
