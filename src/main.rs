@@ -54,34 +54,6 @@ impl App {
         format!("{}{}", card.rank_label(), card.suit.symbol())
     }
 
-    fn try_auto_foundation(&mut self) -> bool {
-        if self.game.selected.is_some() {
-            return self.game.move_selected_to_any_foundation();
-        }
-
-        if !self.game.waste.is_empty() {
-            let _ = self.game.select_waste();
-            if self.game.move_selected_to_any_foundation() {
-                return true;
-            }
-            self.game.clear_selection();
-        }
-
-        for pile in 0..self.game.tableau.len() {
-            if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
-                && self.game.tableau[pile][top_index].face_up
-            {
-                let _ = self.game.select_tableau(pile, top_index);
-                if self.game.move_selected_to_any_foundation() {
-                    return true;
-                }
-                self.game.clear_selection();
-            }
-        }
-
-        false
-    }
-
     fn schedule_all_to_temple_step(&mut self, ctx: &Context<Self>) {
         let link = ctx.link().clone();
         self.all_to_temple_timeout = Some(Timeout::new(110, move || {
@@ -249,6 +221,7 @@ impl Component for App {
             let msg = match key.as_str() {
                 "d" | "D" => Some(Msg::DrawStock),
                 "a" | "A" => Some(Msg::AllToTemple),
+                " " => Some(Msg::AutoFoundation),
                 "Enter" => {
                     // Skip when a button already has focus so Enter still
                     // activates the focused control via the browser instead
@@ -443,7 +416,7 @@ impl Component for App {
                 }
             }
             Msg::AutoFoundation => {
-                if self.try_auto_foundation() {
+                if self.game.auto_promote_lowest() {
                     self.status = "Moved one card to a foundation.".to_string();
                 } else {
                     self.status = "No automatic foundation move available.".to_string();
@@ -455,7 +428,7 @@ impl Component for App {
                 }
 
                 self.game.clear_selection();
-                if self.try_auto_foundation() {
+                if self.game.auto_promote_lowest() {
                     if self.game.won {
                         self.trigger_victory();
                     } else {
@@ -473,7 +446,7 @@ impl Component for App {
                     return false;
                 }
 
-                if self.try_auto_foundation() {
+                if self.game.auto_promote_lowest() {
                     if self.game.won {
                         self.trigger_victory();
                     } else {
@@ -770,7 +743,7 @@ impl Component for App {
                     <span>{ "Build tableau in descending alternating colors." }</span>
                     <span>{ "Zeus' Vision reveals hidden cards and ends the game." }</span>
                     <span>{ "All To Temple auto-runs endgame moves until no temple move remains." }</span>
-                    <span>{ "Keys: D or Enter to draw, A for All To Temple." }</span>
+                    <span>{ "Keys: D or Enter draws, Space sends one to temple, A sends all." }</span>
                 </section>
                 <span class="version-tag" aria-hidden="true">{ concat!("v", env!("CARGO_PKG_VERSION")) }</span>
             </main>

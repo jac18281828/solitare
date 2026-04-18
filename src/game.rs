@@ -92,6 +92,12 @@ pub enum Selection {
     Tableau { pile: usize, index: usize },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoSource {
+    Waste,
+    TableauTop { pile: usize, index: usize },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GameState {
     pub stock: Vec<Card>,
@@ -289,6 +295,75 @@ impl GameState {
             }
         }
         false
+    }
+
+    pub fn can_promote_to_foundation(&self, card: Card) -> bool {
+        self.foundations
+            .iter()
+            .any(|pile| can_place_on_foundation(card, pile))
+    }
+
+    /// Pick the lowest-rank face-up card that can currently be promoted to a
+    /// foundation. Waste takes priority over tableau on rank ties, because a
+    /// waste card has already left the tableau chain-play pool.
+    pub fn lowest_promotable_source(&self) -> Option<AutoSource> {
+        let mut best: Option<(u8, AutoSource)> = None;
+
+        if let Some(card) = self.waste.last().copied()
+            && self.can_promote_to_foundation(card)
+        {
+            best = Some((card.rank, AutoSource::Waste));
+        }
+
+        for (pile, cards) in self.tableau.iter().enumerate() {
+            let Some(top) = cards.last() else { continue };
+            if !top.face_up || !self.can_promote_to_foundation(top.card) {
+                continue;
+            }
+            let rank = top.card.rank;
+            let better = match best {
+                Some((best_rank, _)) => rank < best_rank,
+                None => true,
+            };
+            if better {
+                let index = cards.len() - 1;
+                best = Some((rank, AutoSource::TableauTop { pile, index }));
+            }
+        }
+
+        best.map(|(_, source)| source)
+    }
+
+    /// Promote the lowest-rank eligible card to a foundation using
+    /// [`lowest_promotable_source`]. Returns true when a card moved.
+    ///
+    /// If a selection is already active, that selection is attempted first;
+    /// this preserves the "click Auto with a card selected to send it up"
+    /// UI affordance.
+    pub fn auto_promote_lowest(&mut self) -> bool {
+        if self.selected.is_some() {
+            return self.move_selected_to_any_foundation();
+        }
+
+        let Some(source) = self.lowest_promotable_source() else {
+            return false;
+        };
+
+        match source {
+            AutoSource::Waste => {
+                self.select_waste();
+            }
+            AutoSource::TableauTop { pile, index } => {
+                self.select_tableau(pile, index);
+            }
+        }
+
+        if self.move_selected_to_any_foundation() {
+            true
+        } else {
+            self.clear_selection();
+            false
+        }
     }
 
     pub fn move_selected_to_foundation(&mut self, target: usize) -> bool {
@@ -740,6 +815,97 @@ mod tests {
         assert_eq!(game.stock.len(), 2);
         assert_eq!(game.waste.len(), 1);
         assert_eq!(game.moves, 1);
+    }
+
+    #[test]
+    fn auto_promote_picks_lowest_rank_across_sources() {
+        let mut game = GameState::empty();
+        game.foundations[0].push(c(1, Suit::Clubs));
+        game.foundations[1].push(c(1, Suit::Diamonds));
+        game.foundations[2].push(c(1, Suit::Hearts));
+        game.foundations[3].push(c(1, Suit::Spades));
+
+        game.waste.push(c(5, Suit::Hearts));
+        game.tableau[0] = vec![TableauCard {
+            card: c(2, Suit::Clubs),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+        game.tableau[1] = vec![TableauCard {
+            card: c(2, Suit::Diamonds),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+
+        let source = game
+            .lowest_promotable_source()
+            .expect("some card promotable");
+        match source {
+            AutoSource::TableauTop { pile, index } => {
+                assert!(pile == 0 || pile == 1);
+                assert_eq!(index, 0);
+                let promoted = game.tableau[pile][index].card;
+                assert_eq!(promoted.rank, 2);
+            }
+            AutoSource::Waste => panic!("waste has rank 5; lowest is 2 in tableau"),
+        }
+    }
+
+    #[test]
+    fn auto_promote_tiebreaks_to_waste_over_tableau() {
+        let mut game = GameState::empty();
+        game.foundations[2].push(c(1, Suit::Hearts));
+        game.foundations[3].push(c(1, Suit::Spades));
+
+        game.waste.push(c(2, Suit::Hearts));
+        game.tableau[0] = vec![TableauCard {
+            card: c(2, Suit::Spades),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+
+        let source = game
+            .lowest_promotable_source()
+            .expect("some card promotable");
+        assert_eq!(source, AutoSource::Waste);
+    }
+
+    #[test]
+    fn auto_promote_ignores_face_down_tableau_top() {
+        let mut game = GameState::empty();
+        game.tableau[0] = vec![TableauCard {
+            card: c(1, Suit::Clubs),
+            face_up: false,
+            zeus_revealed: false,
+        }];
+
+        assert!(game.lowest_promotable_source().is_none());
+    }
+
+    #[test]
+    fn auto_promote_moves_the_lowest_card_and_scores_gold() {
+        let mut game = GameState::empty();
+        game.waste.push(c(1, Suit::Hearts));
+        game.tableau[0] = vec![TableauCard {
+            card: c(1, Suit::Spades),
+            face_up: true,
+            zeus_revealed: false,
+        }];
+
+        assert!(game.auto_promote_lowest());
+        // Waste tie-break: A♥ from waste went up before A♠ from tableau.
+        assert!(game.waste.is_empty());
+        assert_eq!(game.tableau[0].len(), 1);
+        assert_eq!(game.temple_gold, 1);
+    }
+
+    #[test]
+    fn auto_promote_returns_false_when_no_card_eligible() {
+        let mut game = GameState::empty();
+        game.waste.push(c(7, Suit::Hearts));
+
+        assert!(!game.auto_promote_lowest());
+        assert_eq!(game.waste.len(), 1);
     }
 
     #[test]
