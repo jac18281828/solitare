@@ -760,12 +760,15 @@ name = "solitare"
 version = "0.1.6"
 dependencies = [
  "getrandom 0.4.2",
+ "gloo-events",
  "gloo-timers",
  "js-sys",
  "log",
  "rand",
  "rand_chacha",
+ "wasm-bindgen",
  "wasm-logger",
+ "web-sys",
  "yew",
 ]
 

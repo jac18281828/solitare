@@ -1,6 +1,9 @@
+use gloo_events::EventListener;
 use gloo_timers::callback::Timeout;
 use log::info;
 use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection};
+use wasm_bindgen::JsCast;
+use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::MouseEvent;
 use yew::{Component, Context, Html, Renderer, classes, html};
 
@@ -20,6 +23,7 @@ pub struct App {
     victory_rain_dismissed: bool,
     all_to_temple_running: bool,
     all_to_temple_timeout: Option<Timeout>,
+    key_listener: Option<EventListener>,
 }
 
 pub enum Msg {
@@ -218,7 +222,56 @@ impl Component for App {
             victory_rain_dismissed: false,
             all_to_temple_running: false,
             all_to_temple_timeout: None,
+            key_listener: None,
         }
+    }
+
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        if !first_render || self.key_listener.is_some() {
+            return;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let link = ctx.link().clone();
+        let listener = EventListener::new(&document, "keydown", move |event| {
+            let Some(event) = event.dyn_ref::<DomKeyboardEvent>() else {
+                return;
+            };
+            if event.repeat() || event.ctrl_key() || event.meta_key() || event.alt_key() {
+                return;
+            }
+
+            let key = event.key();
+            let msg = match key.as_str() {
+                "d" | "D" => Some(Msg::DrawStock),
+                "a" | "A" => Some(Msg::AllToTemple),
+                "Enter" => {
+                    // Skip when a button already has focus so Enter still
+                    // activates the focused control via the browser instead
+                    // of double-firing DrawStock.
+                    let button_focused = web_sys::window()
+                        .and_then(|w| w.document())
+                        .and_then(|d| d.active_element())
+                        .is_some_and(|e| e.tag_name().eq_ignore_ascii_case("BUTTON"));
+                    if button_focused {
+                        None
+                    } else {
+                        Some(Msg::DrawStock)
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(msg) = msg {
+                event.prevent_default();
+                link.send_message(msg);
+            }
+        });
+        self.key_listener = Some(listener);
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -717,6 +770,7 @@ impl Component for App {
                     <span>{ "Build tableau in descending alternating colors." }</span>
                     <span>{ "Zeus' Vision reveals hidden cards and ends the game." }</span>
                     <span>{ "All To Temple auto-runs endgame moves until no temple move remains." }</span>
+                    <span>{ "Keys: D or Enter to draw, A for All To Temple." }</span>
                 </section>
                 <span class="version-tag" aria-hidden="true">{ concat!("v", env!("CARGO_PKG_VERSION")) }</span>
             </main>
