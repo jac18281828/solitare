@@ -2,3 +2,5 @@
 /dist
 /.cargo
 /.rustup
+/.venv
+/.claude
