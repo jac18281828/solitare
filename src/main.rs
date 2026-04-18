@@ -36,7 +36,7 @@ pub enum Msg {
     AllToTemple,
     AllToTempleStep,
     ZeusVision,
-    EnableEasyMode,
+    SwitchDrawMode,
     ToggleHelp,
     DismissVictoryRain,
 }
@@ -437,13 +437,18 @@ impl Component for App {
                 self.end_state = Some(EndState::ZeusThunder);
                 self.status = "Zeus' Thunder is heard".to_string();
             }
-            Msg::EnableEasyMode => {
-                if self.game.draw_count == EASY_DRAW_COUNT {
-                    self.status = "Easy mode is already active.".to_string();
+            Msg::SwitchDrawMode => {
+                let next = if self.game.draw_count == EASY_DRAW_COUNT {
+                    HARD_DRAW_COUNT
                 } else {
-                    self.game.set_draw_count(EASY_DRAW_COUNT);
-                    self.status = "Easy mode enabled: draw 1 card from stock.".to_string();
-                }
+                    EASY_DRAW_COUNT
+                };
+                self.game.set_draw_count(next);
+                self.status = if next == EASY_DRAW_COUNT {
+                    "Easy mode: draw 1 card from stock.".to_string()
+                } else {
+                    "Hard mode: draw 3 cards from stock.".to_string()
+                };
             }
             Msg::ToggleHelp => {
                 self.help_expanded = !self.help_expanded;
@@ -476,7 +481,7 @@ impl Component for App {
         let auto_foundation = ctx.link().callback(|_| Msg::AutoFoundation);
         let all_to_temple = ctx.link().callback(|_| Msg::AllToTemple);
         let zeus_vision = ctx.link().callback(|_| Msg::ZeusVision);
-        let enable_easy_mode = ctx.link().callback(|_| Msg::EnableEasyMode);
+        let switch_draw_mode = ctx.link().callback(|_| Msg::SwitchDrawMode);
         let toggle_help = ctx.link().callback(|_| Msg::ToggleHelp);
         let click_waste = ctx.link().callback(|_| Msg::ClickWaste);
         let double_click_waste = ctx.link().callback(|_| Msg::DoubleClickWaste);
@@ -668,8 +673,8 @@ impl Component for App {
 
                 <section class="control-row">
                     <button type="button" onclick={new_game}>{ reset_label }</button>
-                    <button type="button" onclick={enable_easy_mode} disabled={locked || actions_busy || easy_mode_active}>
-                        { if easy_mode_active { "Easy Mode Active" } else { "Switch To Easy" } }
+                    <button type="button" onclick={switch_draw_mode} disabled={locked || actions_busy || self.game.moves > 0}>
+                        { if easy_mode_active { "Switch To Hard" } else { "Switch To Easy" } }
                     </button>
                     <button type="button" onclick={auto_foundation} disabled={locked || actions_busy}>{ "Auto To Temple" }</button>
                     <button type="button" onclick={all_to_temple} disabled={locked || actions_busy}>{ "All To Temple" }</button>
