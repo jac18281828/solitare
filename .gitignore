@@ -5,3 +5,5 @@
 /.venv
 /.claude
 /prompts/
+/node_modules
+/cdk.out
