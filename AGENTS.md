@@ -6,19 +6,17 @@ These rules apply to all AI-assisted changes in this repository.
 1. Read every file you plan to change and directly related modules.
 2. Summarize current behavior and invariants (deck integrity, selection/scoring
    rules, victory/defeat conditions, UI gating when `interactions_locked`).
-3. Propose a minimal patch plan (diff and rationale).
-4. Obtain user approval before editing code.
+3. **Ask each time** — `Cargo.toml` deps, cross-module or public-API refactors, file deletions,
+   CI or release changes.
+4. **Always ask** — merging to `main`, opening a PR, tags, force ops, anything that touches
+   shared state or `main`.
 5. Affirm all `Completion Gates` are met.
 
 ## Code Design
-- Prioritize correctness, then idiomatic and reviewable code.
-- Prefer clarity over cleverness.
-- Write small single-purpose functions with clear names.
-- Expand to single-purpose modules composed of concise functions.
-- Prefer decomposition over accretion: extract helpers as behavior grows.
-- Prefer canonical, widely understood solutions.
-- Treat these rules as defaults; escalate exceptions before implementation.
+- Prioritize correctness, then clarity, convention, and reviewability over cleverness.
 - Keep diffs focused; avoid idiosyncratic churn.
+- Decompose into small, single-purpose functions and modules.
+- Extract helpers as behavior grows rather than accreting onto existing ones.
 - Write comments that explain enduring intent or constraints, no editorial comments.
 
 ## Naming
@@ -32,8 +30,9 @@ These rules apply to all AI-assisted changes in this repository.
 ## Abstraction
 - Abstract to remove duplication or enforce invariants.
 - Prefer concrete types over generic wrappers.
-- Avoid `unwrap`/`expect` outside of tests. Use effective error handling
-  patterns including `Result` and `Option`.
+- Avoid `unwrap`/`expect` outside of tests; truly-infallible uses with a
+  justifying comment are acceptable. Use effective error handling patterns
+  including `Result` and `Option`.
 
 ## Dependencies and Imports
 - Prefer the standard library.
