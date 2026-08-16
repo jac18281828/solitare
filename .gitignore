@@ -4,3 +4,4 @@
 /.rustup
 /.venv
 /.claude
+/prompts/
