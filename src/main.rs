@@ -37,7 +37,8 @@ struct CardSteps {
 }
 
 /// Per-card step counts for a tableau column, plus the same counts for the
-/// whole pile (the counts beneath every card, i.e. the column's totals).
+/// whole pile: the last card's steps, so the pile sizes to that card's
+/// offset rather than one step past it. An empty column has zero steps.
 struct TableauFan {
     cards: Vec<CardSteps>,
     pile: CardSteps,
@@ -46,7 +47,7 @@ struct TableauFan {
 fn fan_offsets(pile: &[TableauCard]) -> TableauFan {
     let mut down = 0usize;
     let mut up = 0usize;
-    let cards = pile
+    let cards: Vec<CardSteps> = pile
         .iter()
         .map(|card| {
             let steps = CardSteps { down, up };
@@ -58,9 +59,10 @@ fn fan_offsets(pile: &[TableauCard]) -> TableauFan {
             steps
         })
         .collect();
+    let pile_steps = cards.last().copied().unwrap_or_default();
     TableauFan {
         cards,
-        pile: CardSteps { down, up },
+        pile: pile_steps,
     }
 }
 
@@ -886,10 +888,10 @@ mod tests {
     }
 
     #[test]
-    fn fan_offsets_pile_counts_total_the_column() {
+    fn fan_offsets_pile_matches_last_card() {
         let fan = fan_offsets(&mixed_pile());
 
-        assert_eq!(fan.pile, CardSteps { down: 2, up: 3 });
+        assert_eq!(fan.pile, CardSteps { down: 2, up: 2 });
     }
 
     #[test]
