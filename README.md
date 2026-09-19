@@ -100,6 +100,8 @@ Workflow behavior:
 Required GitHub setup:
 1. AWS OIDC role trust for GitHub Actions:
    - `arn:aws:iam::504242000181:role/GithubDeployCI`
+2. `us-east-1` in account 504242000181 is CDK-bootstrapped, and
+   `GithubDeployCI` can assume its deploy and file-publishing roles.
 
 Notes:
 - The deploy workflow deploys the stack before syncing content.
