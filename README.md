@@ -46,9 +46,8 @@ Start steps:
 
 ## Production Deploy (S3 + CloudFront)
 
-Infrastructure and content ship separately. The CDK app under `cdk/` defines every
-AWS resource `solitare.2ad.com` needs; the deploy workflow only syncs built content
-into it.
+The CDK app under `cdk/` defines every AWS resource `solitare.2ad.com` needs.
+Every tag deploys that stack, then syncs built content into it.
 
 ### Infrastructure (`cdk/`)
 
@@ -63,7 +62,8 @@ It does not own the `2ad.com` hosted zone: that is imported read-only and manage
 no stack, so it survives the teardown of any one site. It does not own site content
 either — `deploy-static-site.yml` puts that in the bucket.
 
-Deploy and tear down with:
+The tag workflow deploys this stack on every run. Use these commands directly only
+for a first deploy or a teardown:
 
 ```sh
 bun install
@@ -71,19 +71,14 @@ bun run cdk:synth StackSolitare2adCom
 bun run cdk:deploy StackSolitare2adCom
 ```
 
-The stack's `DistributionId` output is the value of the `CLOUDFRONT_DISTRIBUTION_ID`
-repository secret that the deploy workflow reads; set it after every deploy that
-replaces the distribution.
+The tag workflow reads the stack's `DistributionId` output straight from
+`cdk-outputs.json`, written by its own `cdk deploy`; a manual deploy has no such
+file, so invalidate the distribution by hand afterward.
 
 The bucket is destroyed with the stack and emptied on the way out, so
 `bun run cdk:destroy StackSolitare2adCom` deletes the live site's content. That is
 safe only because `trunk build` regenerates it from source; a retained bucket would
 instead block the next deploy with `BucketAlreadyExists`.
-
-This stack cannot deploy while `2ad.com` still defines a `StackSolitare2adCom`, because
-CloudFront refuses two distributions claiming `solitare.2ad.com`. The one-time cutover
-order is: destroy the `2ad.com` stack, deploy from here, then merge the `2ad.com`
-removal last.
 
 ### Content (`deploy-static-site.yml`)
 
@@ -96,17 +91,17 @@ Workflow behavior:
 - Runs on tag push or manual dispatch.
 - Builds and tests Rust/WASM.
 - Builds static assets with `trunk`.
+- Typechecks and tests the CDK stack.
+- Deploys `StackSolitare2adCom`, writing `cdk-outputs.json`.
 - Syncs `dist/` to the private S3 bucket.
 - Uploads `index.html` with no-cache headers.
-- Invalidates CloudFront if `CLOUDFRONT_DISTRIBUTION_ID` secret is set.
+- Invalidates CloudFront using the `DistributionId` from `cdk-outputs.json`.
 
 Required GitHub setup:
-1. Repository secret: `CLOUDFRONT_DISTRIBUTION_ID` (from the stack's `DistributionId` output).
-2. AWS OIDC role trust for GitHub Actions:
+1. AWS OIDC role trust for GitHub Actions:
    - `arn:aws:iam::504242000181:role/GithubDeployCI`
-3. The stack deployed, so the bucket and distribution exist.
 
 Notes:
-- The deploy workflow creates no infrastructure; `cdk deploy` does.
+- The deploy workflow deploys the stack before syncing content.
 - Bucket, region and domain are defined in `cdk/solitare-stack.ts`; the workflow env
   values must match it.

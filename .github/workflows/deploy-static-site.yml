@@ -8,14 +8,13 @@ permissions:
   contents: write
   id-token: write
 concurrency:
-  group: "deploy-static-site-${{ github.ref }}"
-  cancel-in-progress: true
+  group: deploy-solitare
+  cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
   S3_BUCKET_NAME: "solitare-us-east-1-504242000181"
   AWS_REGION: "us-east-1"
   SITE_URL: "https://solitare.2ad.com"
-  CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -28,6 +27,16 @@ jobs:
           audience: sts.amazonaws.com
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::504242000181:role/GithubDeployCI
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install Node dependencies
+        run: bun install --frozen-lockfile
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,6 +74,13 @@ jobs:
       - name: Build Artifact
         run: |
           trunk build --release --public-url ${{ env.SITE_URL }}
+      - name: Typecheck
+        run: bun run build
+      - name: Run CDK stack tests
+        run: bun run test
+      - name: Deploy infrastructure
+        run: |
+          bun run cdk:deploy -- StackSolitare2adCom --require-approval never --no-telemetry --outputs-file cdk-outputs.json
       - name: Sync S3 Bucket
         run: |
           aws s3 sync ./dist s3://${S3_BUCKET_NAME} --delete --region ${{ env.AWS_REGION }}
@@ -75,10 +91,14 @@ jobs:
             --cache-control "no-cache, no-store, must-revalidate" \
             --content-type "text/html; charset=utf-8"
       - name: Invalidate CloudFront cache
-        if: ${{ env.CLOUDFRONT_DISTRIBUTION_ID != '' }}
         run: |
+          DISTRIBUTION_ID="$(jq -r '.StackSolitare2adCom.DistributionId // empty' cdk-outputs.json)"
+          if [[ -z "$DISTRIBUTION_ID" ]]; then
+            echo "Missing DistributionId output for StackSolitare2adCom" >&2
+            exit 1
+          fi
           aws cloudfront create-invalidation \
-            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --distribution-id "$DISTRIBUTION_ID" \
             --paths "/*"
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
