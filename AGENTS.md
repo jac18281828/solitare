@@ -8,7 +8,8 @@ These rules apply to all AI-assisted changes in this repository.
    rules, victory/defeat conditions, UI gating when `interactions_locked`).
 3. **Ask each time** — `Cargo.toml` deps, cross-module or public-API refactors, file deletions,
    CI or release changes.
-4. **Always ask** — merging to `main`, opening a PR, tags, force ops, anything that touches
+4. **Always ask** — merging to `main`, opening a PR, tags, force ops (a rebased
+   `agent/` branch pushes with `--force-with-lease`), anything that touches
    shared state or `main`.
 5. Affirm all `Completion Gates` are met.
 
@@ -76,3 +77,9 @@ Before marking work complete, run and report:
    out-of-gold lockout, Zeus' Vision reveal)
 
 Do not mark work complete until all gates pass.
+
+## Commits
+- Conventional Commits, signed, lower-case `type(scope): subject`, wrapped at
+  80 columns.
+- All commits land on a branch; `main` only fast-forwards.
+- Rebase, never squash; review fixes are their own commits.
