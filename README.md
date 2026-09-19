@@ -55,8 +55,8 @@ into it.
 `StackSolitare2adCom` owns, in `us-east-1`:
 - the origin S3 bucket `solitare-us-east-1-504242000181`, private and encrypted
 - the ACM certificate for `solitare.2ad.com`, DNS-validated
-- the CloudFront distribution, its Origin Access Control and SPA error mapping
-- the bucket policy granting read access to that distribution alone
+- the CloudFront distribution, its Origin Access Control and 404 page
+- the bucket policy granting read and list access to that distribution alone
 - the `solitare` A and AAAA alias records
 
 It does not own the `2ad.com` hosted zone: that is imported read-only and managed by

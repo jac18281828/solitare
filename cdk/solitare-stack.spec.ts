@@ -104,6 +104,21 @@ describe('SolitareStack', () => {
             Principal: { Service: 'cloudfront.amazonaws.com' },
           }),
           Match.objectLike({
+            Sid: 'AllowCloudFrontServicePrincipalList',
+            Effect: 'Allow',
+            Action: 's3:ListBucket',
+            Principal: { Service: 'cloudfront.amazonaws.com' },
+            // The bucket itself, not `/*` — ListBucket is a bucket-level
+            // action, distinct from the object-level GetObject grant above.
+            Resource: { 'Fn::GetAtt': [Match.anyValue(), 'Arn'] },
+            Condition: {
+              StringEquals: {
+                'AWS:SourceArn': Match.anyValue(),
+                'AWS:SourceAccount': Match.anyValue(),
+              },
+            },
+          }),
+          Match.objectLike({
             Sid: 'DenyDirectS3ReadForObjects',
             Effect: 'Deny',
             Action: 's3:GetObject',
@@ -145,24 +160,24 @@ describe('SolitareStack', () => {
     });
   });
 
-  it('configures SPA behavior for the CloudFront distribution', () => {
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        DefaultRootObject: 'index.html',
-        CustomErrorResponses: Match.arrayWith([
-          Match.objectLike({
-            ErrorCode: 403,
-            ResponseCode: 200,
-            ResponsePagePath: '/index.html',
-          }),
-          Match.objectLike({
-            ErrorCode: 404,
-            ResponseCode: 200,
-            ResponsePagePath: '/index.html',
-          }),
-        ]),
+  it('reports a true 404 for missing paths instead of the SPA fallback', () => {
+    // Match.arrayWith cannot assert absence, so the synthesized
+    // CustomErrorResponses array is inspected directly for the 403 entry
+    // and the 200 response that this stack must no longer produce.
+    const [distribution] = Object.values(template.findResources('AWS::CloudFront::Distribution'));
+    const errorResponses: Array<Record<string, unknown>> =
+      distribution.Properties.DistributionConfig.CustomErrorResponses;
+
+    expect(distribution.Properties.DistributionConfig.DefaultRootObject).toBe('index.html');
+    expect(errorResponses.some((response) => response.ErrorCode === 403)).toBe(false);
+    expect(errorResponses.some((response) => response.ResponseCode === 200)).toBe(false);
+    expect(errorResponses).toEqual([
+      expect.objectContaining({
+        ErrorCode: 404,
+        ResponseCode: 404,
+        ResponsePagePath: '/index.html',
       }),
-    });
+    ]);
   });
 
   it('creates A and AAAA alias records in the imported zone', () => {

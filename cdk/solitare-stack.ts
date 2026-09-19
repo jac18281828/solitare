@@ -67,15 +67,11 @@ export class SolitareStack extends cdk.Stack {
         compress: true,
       },
       errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
+        // A missing asset reports its own 404 rather than 200 /index.html;
+        // the game page still lands a mistyped URL on `/`.
         {
           httpStatus: 404,
-          responseHttpStatus: 200,
+          responseHttpStatus: 404,
           responsePagePath: '/index.html',
           ttl: cdk.Duration.minutes(5),
         },
@@ -95,6 +91,23 @@ export class SolitareStack extends cdk.Stack {
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
         actions: ['s3:GetObject'],
         resources: [`${this.bucket.bucketArn}/*`],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': distributionArn,
+            'AWS:SourceAccount': cdk.Aws.ACCOUNT_ID,
+          },
+        },
+      }),
+    );
+
+    // Without ListBucket, S3 masks a missing key as 403 rather than 404.
+    this.bucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudFrontServicePrincipalList',
+        effect: iam.Effect.ALLOW,
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        actions: ['s3:ListBucket'],
+        resources: [this.bucket.bucketArn],
         conditions: {
           StringEquals: {
             'AWS:SourceArn': distributionArn,
