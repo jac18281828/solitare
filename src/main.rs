@@ -7,26 +7,6 @@ use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::MouseEvent;
 use yew::{Component, Context, Html, Renderer, classes, html};
 
-/// Face-down and face-up step counts sitting above each card in a tableau
-/// column, for the CSS `--fan-down`/`--fan-up` offsets. Each entry counts
-/// only the cards below it in the pile, so the stylesheet's `calc()` can
-/// place a card's top edge and, from the last entry, the pile's height.
-fn fan_offsets(pile: &[TableauCard]) -> Vec<(usize, usize)> {
-    let mut down = 0usize;
-    let mut up = 0usize;
-    pile.iter()
-        .map(|card| {
-            let steps = (down, up);
-            if card.face_up {
-                up += 1;
-            } else {
-                down += 1;
-            }
-            steps
-        })
-        .collect()
-}
-
 const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -43,6 +23,44 @@ fn load_temple_gold() -> usize {
 fn persist_temple_gold(value: usize) {
     if let Some(storage) = local_storage() {
         let _ = storage.set_item(TEMPLE_GOLD_STORAGE_KEY, &value.to_string());
+    }
+}
+
+/// A card's face-down and face-up step counts within its tableau column,
+/// counting only the cards beneath it (dealt before it). The stylesheet
+/// resolves these into fan offsets and pile height via `--fan-down`/
+/// `--fan-up`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CardSteps {
+    down: usize,
+    up: usize,
+}
+
+/// Per-card step counts for a tableau column, plus the same counts for the
+/// whole pile (the counts beneath every card, i.e. the column's totals).
+struct TableauFan {
+    cards: Vec<CardSteps>,
+    pile: CardSteps,
+}
+
+fn fan_offsets(pile: &[TableauCard]) -> TableauFan {
+    let mut down = 0usize;
+    let mut up = 0usize;
+    let cards = pile
+        .iter()
+        .map(|card| {
+            let steps = CardSteps { down, up };
+            if card.face_up {
+                up += 1;
+            } else {
+                down += 1;
+            }
+            steps
+        })
+        .collect();
+    TableauFan {
+        cards,
+        pile: CardSteps { down, up },
     }
 }
 
@@ -646,14 +664,16 @@ impl Component for App {
             .iter()
             .enumerate()
             .map(|(pile_index, pile)| {
-                let pile_click = ctx.link().callback(move |_| Msg::ClickTableauPile(pile_index));
+                let pile_click = ctx
+                    .link()
+                    .callback(move |_| Msg::ClickTableauPile(pile_index));
                 let fan = fan_offsets(pile);
 
                 let cards = pile
                     .iter()
-                    .zip(fan.iter())
+                    .zip(fan.cards.iter())
                     .enumerate()
-                    .map(|(card_index, (tableau_card, &(down, up)))| {
+                    .map(|(card_index, (tableau_card, steps))| {
                         let on_click = ctx.link().callback(move |event: MouseEvent| {
                             event.stop_propagation();
                             Msg::ClickTableauCard(pile_index, card_index)
@@ -686,12 +706,14 @@ impl Component for App {
                         };
 
                         html! {
-                            <div class="tableau-layer" style={format!("--fd: {down}; --fu: {up};")}> { card_html } </div>
+                            <div class="tableau-layer" style={format!(
+                                "--down-steps: {}; --up-steps: {};",
+                                steps.down, steps.up,
+                            )}> { card_html } </div>
                         }
                     })
                     .collect::<Html>();
 
-                let (pile_fd, pile_fu) = fan.last().copied().unwrap_or((0, 0));
                 let mut pile_classes = classes!("tableau-pile");
                 if pile.is_empty() {
                     pile_classes.push("empty");
@@ -709,7 +731,10 @@ impl Component for App {
                                     pile_click
                                 }
                             }
-                            style={format!("--fd: {pile_fd}; --fu: {pile_fu};")}
+                            style={format!(
+                                "--down-steps: {}; --up-steps: {};",
+                                fan.pile.down, fan.pile.up,
+                            )}
                             aria-label={format!("Tableau column {}", pile_index + 1)}
                         >
                             { cards }
@@ -820,7 +845,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::fan_offsets;
+    use super::{CardSteps, fan_offsets};
     use solitare::game::{Card, Suit, TableauCard};
 
     fn card(rank: u8, face_up: bool) -> TableauCard {
@@ -834,20 +859,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fan_offsets_counts_cards_below_each_card() {
-        let pile = vec![
+    fn mixed_pile() -> Vec<TableauCard> {
+        vec![
             card(1, false),
             card(2, false),
             card(3, true),
             card(4, true),
             card(5, true),
-        ];
+        ]
+    }
 
-        let fan = fan_offsets(&pile);
+    #[test]
+    fn fan_offsets_counts_cards_below_each_card() {
+        let fan = fan_offsets(&mixed_pile());
 
-        assert_eq!(fan, vec![(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)]);
-        assert_eq!(fan.last().copied(), Some((2, 2)));
+        assert_eq!(
+            fan.cards,
+            vec![
+                CardSteps { down: 0, up: 0 },
+                CardSteps { down: 1, up: 0 },
+                CardSteps { down: 2, up: 0 },
+                CardSteps { down: 2, up: 1 },
+                CardSteps { down: 2, up: 2 },
+            ]
+        );
+    }
+
+    #[test]
+    fn fan_offsets_pile_counts_total_the_column() {
+        let fan = fan_offsets(&mixed_pile());
+
+        assert_eq!(fan.pile, CardSteps { down: 2, up: 3 });
     }
 
     #[test]
@@ -856,7 +898,7 @@ mod tests {
 
         let fan = fan_offsets(&pile);
 
-        assert!(fan.is_empty());
-        assert_eq!(fan.last().copied().unwrap_or((0, 0)), (0, 0));
+        assert!(fan.cards.is_empty());
+        assert_eq!(fan.pile, CardSteps { down: 0, up: 0 });
     }
 }

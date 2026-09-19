@@ -756,7 +756,10 @@ body::before {
     width: var(--card-w);
     /* A pathological fanned column may exceed the viewport and scroll the
        page vertically rather than clip. */
-    height: calc(var(--fd, 0) * var(--fan-down) + var(--fu, 0) * var(--fan-up) + var(--card-h));
+    height: calc(
+        var(--down-steps, 0) * var(--fan-down) + var(--up-steps, 0) * var(--fan-up) +
+            var(--card-h)
+    );
 }
 
 .tableau-pile.empty {
@@ -780,9 +783,9 @@ body::before {
     position: absolute;
     left: 0;
     width: var(--card-w);
-    top: calc(var(--fd, 0) * var(--fan-down) + var(--fu, 0) * var(--fan-up));
+    top: calc(var(--down-steps, 0) * var(--fan-down) + var(--up-steps, 0) * var(--fan-up));
     /* Scope each layer's own stacking so a face-down card's medallion never
-       paints above the face-up cards fanned on top of it (defect 1). */
+       paints above the face-up cards fanned on top of it. */
     isolation: isolate;
 }
 
@@ -846,7 +849,6 @@ body::before {
 
     .title-wrap {
         padding-inline: 12px;
-        order: 0;
     }
 
     .title-wrap h1 {
@@ -859,8 +861,25 @@ body::before {
         display: none;
     }
 
+    /* Three pills must clear the status text at 360px: shrink them and let
+       the status text claim its own full-width line below them. */
+    .status-pill {
+        padding: 4px 8px;
+        font-size: 0.66rem;
+    }
+
     .status-text {
+        flex: 1 1 100%;
         min-width: 0;
+        padding: 4px 10px;
+        font-size: 0.7rem;
+        line-height: 1.15;
+    }
+
+    /* Below 44px cards a fixed-size motif clips into unreadable glyph
+       fragments; the corner already carries rank and suit. */
+    .card .center .motif {
+        display: none;
     }
 
     .help-strip {
