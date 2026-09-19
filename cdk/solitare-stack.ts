@@ -67,8 +67,7 @@ export class SolitareStack extends cdk.Stack {
         compress: true,
       },
       errorResponses: [
-        // A missing asset reports its own 404 rather than 200 /index.html;
-        // the game page still lands a mistyped URL on `/`.
+        // Missing paths report 404 and serve the game page as the body.
         {
           httpStatus: 404,
           responseHttpStatus: 404,

@@ -91,6 +91,10 @@ describe('SolitareStack', () => {
   });
 
   it('scopes the bucket policy to CloudFront by Sid, with the expected effects', () => {
+    const bucketLogicalIds = Object.keys(template.findResources('AWS::S3::Bucket'));
+    expect(bucketLogicalIds).toHaveLength(1);
+    const [bucketLogicalId] = bucketLogicalIds;
+
     // Matched by statement rather than by bucket name: the policy references
     // its bucket by Ref, so a literal-name assertion cannot pass.
     template.hasResourceProperties('AWS::S3::BucketPolicy', {
@@ -110,7 +114,7 @@ describe('SolitareStack', () => {
             Principal: { Service: 'cloudfront.amazonaws.com' },
             // The bucket itself, not `/*` — ListBucket is a bucket-level
             // action, distinct from the object-level GetObject grant above.
-            Resource: { 'Fn::GetAtt': [Match.anyValue(), 'Arn'] },
+            Resource: { 'Fn::GetAtt': [bucketLogicalId, 'Arn'] },
             Condition: {
               StringEquals: {
                 'AWS:SourceArn': Match.anyValue(),
