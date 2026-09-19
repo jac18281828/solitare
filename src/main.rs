@@ -1,11 +1,31 @@
 use gloo_events::EventListener;
 use gloo_timers::callback::Timeout;
 use log::info;
-use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection};
+use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection, TableauCard};
 use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::MouseEvent;
 use yew::{Component, Context, Html, Renderer, classes, html};
+
+/// Face-down and face-up step counts sitting above each card in a tableau
+/// column, for the CSS `--fan-down`/`--fan-up` offsets. Each entry counts
+/// only the cards below it in the pile, so the stylesheet's `calc()` can
+/// place a card's top edge and, from the last entry, the pile's height.
+fn fan_offsets(pile: &[TableauCard]) -> Vec<(usize, usize)> {
+    let mut down = 0usize;
+    let mut up = 0usize;
+    pile.iter()
+        .map(|card| {
+            let steps = (down, up);
+            if card.face_up {
+                up += 1;
+            } else {
+                down += 1;
+            }
+            steps
+        })
+        .collect()
+}
 
 const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
 
@@ -627,17 +647,13 @@ impl Component for App {
             .enumerate()
             .map(|(pile_index, pile)| {
                 let pile_click = ctx.link().callback(move |_| Msg::ClickTableauPile(pile_index));
-                let mut offset = 0usize;
-                let mut visible_height = 0usize;
+                let fan = fan_offsets(pile);
 
                 let cards = pile
                     .iter()
+                    .zip(fan.iter())
                     .enumerate()
-                    .map(|(card_index, tableau_card)| {
-                        let top = offset;
-                        offset += if tableau_card.face_up { 30 } else { 14 };
-                        visible_height = visible_height.max(top + 150);
-
+                    .map(|(card_index, (tableau_card, &(down, up)))| {
                         let on_click = ctx.link().callback(move |event: MouseEvent| {
                             event.stop_propagation();
                             Msg::ClickTableauCard(pile_index, card_index)
@@ -670,15 +686,15 @@ impl Component for App {
                         };
 
                         html! {
-                            <div class="tableau-layer" style={format!("top: {top}px;")}> { card_html } </div>
+                            <div class="tableau-layer" style={format!("--fd: {down}; --fu: {up};")}> { card_html } </div>
                         }
                     })
                     .collect::<Html>();
 
+                let (pile_fd, pile_fu) = fan.last().copied().unwrap_or((0, 0));
                 let mut pile_classes = classes!("tableau-pile");
                 if pile.is_empty() {
                     pile_classes.push("empty");
-                    visible_height = 150;
                 }
 
                 html! {
@@ -693,7 +709,7 @@ impl Component for App {
                                     pile_click
                                 }
                             }
-                            style={format!("height: {}px;", visible_height.max(150))}
+                            style={format!("--fd: {pile_fd}; --fu: {pile_fu};")}
                             aria-label={format!("Tableau column {}", pile_index + 1)}
                         >
                             { cards }
@@ -764,19 +780,16 @@ impl Component for App {
                 </section>
 
                 <section class="top-board">
-                    <div class="draw-group">
-                        <div class="pile-slot">
-                            <div class="pile-label">{ "Stock" }</div>
-                            { stock_view }
-                        </div>
-                        <div class="pile-slot">
-                            <div class="pile-label">{ "Waste" }</div>
-                            { waste_view }
-                        </div>
+                    <div class="pile-slot">
+                        <div class="pile-label">{ "Stock" }</div>
+                        { stock_view }
                     </div>
-                    <div class="foundation-group">
-                        { foundation_slots }
+                    <div class="pile-slot">
+                        <div class="pile-label">{ "Waste" }</div>
+                        { waste_view }
                     </div>
+                    <div class="pile-slot top-board-gap" aria-hidden="true"></div>
+                    { foundation_slots }
                 </section>
 
                 <section class="tableau-scroll">
@@ -803,4 +816,47 @@ fn main() {
     wasm_logger::init(wasm_logger::Config::default());
     info!("Starting Solitare of Olympus");
     Renderer::<App>::new().render();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fan_offsets;
+    use solitare::game::{Card, Suit, TableauCard};
+
+    fn card(rank: u8, face_up: bool) -> TableauCard {
+        TableauCard {
+            card: Card {
+                suit: Suit::Spades,
+                rank,
+            },
+            face_up,
+            zeus_revealed: false,
+        }
+    }
+
+    #[test]
+    fn fan_offsets_counts_cards_below_each_card() {
+        let pile = vec![
+            card(1, false),
+            card(2, false),
+            card(3, true),
+            card(4, true),
+            card(5, true),
+        ];
+
+        let fan = fan_offsets(&pile);
+
+        assert_eq!(fan, vec![(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)]);
+        assert_eq!(fan.last().copied(), Some((2, 2)));
+    }
+
+    #[test]
+    fn fan_offsets_empty_column_has_zero_steps() {
+        let pile: Vec<TableauCard> = vec![];
+
+        let fan = fan_offsets(&pile);
+
+        assert!(fan.is_empty());
+        assert_eq!(fan.last().copied().unwrap_or((0, 0)), (0, 0));
+    }
 }
