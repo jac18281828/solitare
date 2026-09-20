@@ -126,6 +126,11 @@ body::before {
     inset: 0;
     pointer-events: none;
     z-index: 0;
+    /* Query-container so ::after's mask-size can derive its height from
+       cqw: a mask-image gradient has no intrinsic ratio, so a plain
+       percentage height falls back to the full box instead of the
+       painting's own aspect ratio, leaving the fade short of the edge. */
+    container-type: inline-size;
     background-image:
         radial-gradient(circle at 35% 12%, rgba(255, 245, 203, 0.14), transparent 28%),
         var(--art-laurel);
@@ -136,23 +141,31 @@ body::before {
     transition: opacity 0.35s ease;
 }
 
-/* The temple backdrop lives in its own box, sized to the painting's own
-   aspect ratio, so mask-image can feather its edges without touching the
-   laurel layer beside it. */
-.felt-art::after {
+/* Full-bleed keeps background-position anchored like the layer each
+   pseudo-element replaces; mask-image/-size/-position track it so the
+   temple fades on all four edges instead of stopping at a fixed box. */
+.felt-art::after,
+.top-board::after {
     content: "";
     position: absolute;
-    right: 2%;
-    top: 42%;
-    width: 34%;
-    aspect-ratio: 533 / 661;
+    z-index: 0;
     pointer-events: none;
     background-image: var(--art-temple);
-    background-size: cover;
     background-repeat: no-repeat;
-    mask-image: radial-gradient(ellipse at center, black 55%, transparent 100%);
+    mask-image: radial-gradient(ellipse farthest-side at center, black 45%, transparent 100%);
+    mask-repeat: no-repeat;
     opacity: 0;
     transition: opacity 0.35s ease;
+}
+
+.felt-art::after {
+    inset: 0;
+    background-size: 34% auto;
+    background-position: 98% 42%;
+    /* mask-size height in cqw, not %, matches the image's real aspect
+       ratio (661 / 533) instead of the oversized fallback box. */
+    mask-size: 34cqw calc(34cqw * 661 / 533);
+    mask-position: 98% 42%;
 }
 
 .art-dionysus {
@@ -495,25 +508,13 @@ body::before {
     transition: opacity 0.35s ease;
 }
 
-/* The temple backdrop lives in its own box, sized to the painting's own
-   aspect ratio, so mask-image can feather its edges without touching the
-   laurel layer beside it. */
 .top-board::after {
-    content: "";
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 20%;
-    aspect-ratio: 533 / 661;
-    z-index: 0;
-    pointer-events: none;
-    background-image: var(--art-temple);
-    background-size: cover;
-    background-repeat: no-repeat;
-    mask-image: radial-gradient(ellipse at center, black 55%, transparent 100%);
-    opacity: 0;
-    transition: opacity 0.35s ease;
+    inset: -6px 0 auto;
+    height: calc(var(--card-h) + 44px);
+    background-size: 20% auto;
+    background-position: right center;
+    mask-size: 20% auto;
+    mask-position: right center;
 }
 
 .ended .top-board::before,
