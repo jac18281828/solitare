@@ -107,6 +107,15 @@ enum DropTarget {
     Foundation(usize),
 }
 
+/// The result of resolving a drag's drop against its target: whether the
+/// move landed, and the status line to show — worded identically to the
+/// equivalent two-tap move (§8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DropOutcome {
+    moved: bool,
+    status: String,
+}
+
 /// One pointer's press-to-release gesture on a card or run. `origin` is the
 /// selection the gesture would pick up; `selection_before` is whatever was
 /// selected before the gesture started, restored on cancel or an illegal
@@ -195,6 +204,11 @@ impl EndState {
     }
 }
 
+/// Status text the click and drag paths must agree on word for word (§8).
+const ILLEGAL_TABLEAU_MOVE: &str = "Illegal tableau move.";
+const ILLEGAL_FOUNDATION_MOVE: &str = "Illegal foundation move.";
+const EMPTY_TABLEAU_NEEDS_KING: &str = "Only a King can move into an empty tableau column.";
+
 pub struct App {
     game: GameState,
     status: String,
@@ -210,6 +224,10 @@ pub struct App {
     /// Set when a drag resolves at `pointerup`, so the trailing synthetic
     /// click (and, for the tap-then-drag sequence, a trailing dblclick) is
     /// swallowed instead of re-running the click model on the same input.
+    /// `schedule_just_dragged_clear` clears it on the next macrotask, after
+    /// that same-tick trailing burst has run; a guarded handler only
+    /// consults the flag, it never clears it, or the second of a paired
+    /// click+dblclick would see it already gone.
     just_dragged: bool,
     /// The drop destination currently under the pointer, for highlighting.
     hover_target: Option<DropTarget>,
@@ -236,6 +254,7 @@ pub enum Msg {
     PointerMove(i32, f64, f64),
     PointerUp(i32, f64, f64),
     PointerCancel(i32),
+    ClearJustDragged,
 }
 
 impl App {
@@ -245,6 +264,24 @@ impl App {
 
     fn describe_card(card: Card) -> String {
         format!("{}{}", card.rank_label(), card.suit.symbol())
+    }
+
+    fn tableau_move_status(pile: usize) -> String {
+        format!("Moved cards to tableau column {}.", pile + 1)
+    }
+
+    fn foundation_move_status(pile: usize) -> String {
+        format!("Placed card on foundation {}.", pile + 1)
+    }
+
+    /// Clears `just_dragged` on the next macrotask. Yew drains every message
+    /// queued within one JS task — including a trailing click and, when one
+    /// follows, its paired dblclick — before this timer's task can run, so
+    /// the guard survives exactly that trailing burst and never strands past
+    /// it into an unrelated later click.
+    fn schedule_just_dragged_clear(ctx: &Context<Self>) {
+        let link = ctx.link().clone();
+        Timeout::new(0, move || link.send_message(Msg::ClearJustDragged)).forget();
     }
 
     fn schedule_all_to_temple_step(&mut self, ctx: &Context<Self>) {
@@ -326,6 +363,50 @@ impl App {
         }
         let value = target.get_attribute("data-drop-foundation")?;
         value.parse().ok().map(DropTarget::Foundation)
+    }
+
+    /// Resolves a drag's drop against the hit-tested target, moving through
+    /// the same `GameState` calls the click path uses and wording the result
+    /// the same way. `target` is `None` when the pointer released outside
+    /// any drop zone, which is always illegal.
+    fn resolve_drop(&mut self, target: Option<DropTarget>) -> DropOutcome {
+        match target {
+            Some(DropTarget::Tableau(pile)) => {
+                if self.game.move_selected_to_tableau(pile) {
+                    DropOutcome {
+                        moved: true,
+                        status: Self::tableau_move_status(pile),
+                    }
+                } else if self.game.tableau[pile].is_empty() {
+                    DropOutcome {
+                        moved: false,
+                        status: EMPTY_TABLEAU_NEEDS_KING.to_string(),
+                    }
+                } else {
+                    DropOutcome {
+                        moved: false,
+                        status: ILLEGAL_TABLEAU_MOVE.to_string(),
+                    }
+                }
+            }
+            Some(DropTarget::Foundation(pile)) => {
+                if self.game.move_selected_to_foundation(pile) {
+                    DropOutcome {
+                        moved: true,
+                        status: Self::foundation_move_status(pile),
+                    }
+                } else {
+                    DropOutcome {
+                        moved: false,
+                        status: ILLEGAL_FOUNDATION_MOVE.to_string(),
+                    }
+                }
+            }
+            None => DropOutcome {
+                moved: false,
+                status: ILLEGAL_TABLEAU_MOVE.to_string(),
+            },
+        }
     }
 
     /// The cards a drag from `origin` carries: the exact selection payload,
@@ -697,7 +778,7 @@ impl Component for App {
                 }
                 if self.game.selected.is_some() {
                     if self.game.move_selected_to_foundation(pile) {
-                        self.status = format!("Placed card on foundation {}.", pile + 1);
+                        self.status = Self::foundation_move_status(pile);
                     } else if self.game.select_foundation(pile) {
                         if let Some(card) = self.game.selected_card() {
                             self.status = format!(
@@ -708,7 +789,7 @@ impl Component for App {
                             self.status = "Selection cleared.".to_string();
                         }
                     } else {
-                        self.status = "Illegal foundation move.".to_string();
+                        self.status = ILLEGAL_FOUNDATION_MOVE.to_string();
                     }
                 } else if self.game.select_foundation(pile) {
                     if let Some(card) = self.game.selected_card() {
@@ -727,7 +808,7 @@ impl Component for App {
                 }
                 if self.game.selected.is_some() {
                     if self.game.move_selected_to_tableau(pile) {
-                        self.status = format!("Moved cards to tableau column {}.", pile + 1);
+                        self.status = Self::tableau_move_status(pile);
                     } else if self.game.select_tableau(pile, index) {
                         if let Some(card) = self.game.selected_card() {
                             self.status = format!(
@@ -736,7 +817,7 @@ impl Component for App {
                             );
                         }
                     } else {
-                        self.status = "Illegal tableau move.".to_string();
+                        self.status = ILLEGAL_TABLEAU_MOVE.to_string();
                     }
                 } else if self.game.select_tableau(pile, index) {
                     if let Some(card) = self.game.selected_card() {
@@ -770,12 +851,18 @@ impl Component for App {
                 }
             }
             Msg::ClickTableauPile(pile) => {
+                // Guarded like the other three Click* handlers (§1): inert
+                // today only because cards stop_propagation() and pointer
+                // capture retarget the trailing click away from the pile —
+                // accident, not a rule this handler can rely on.
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.selected.is_some() {
                     if self.game.move_selected_to_tableau(pile) {
-                        self.status = format!("Moved cards to tableau column {}.", pile + 1);
+                        self.status = Self::tableau_move_status(pile);
                     } else {
-                        self.status =
-                            "Only a King can move into an empty tableau column.".to_string();
+                        self.status = EMPTY_TABLEAU_NEEDS_KING.to_string();
                     }
                 } else if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
                     && self.game.tableau[pile][top_index].face_up
@@ -864,8 +951,10 @@ impl Component for App {
                 }
             }
             Msg::PointerDown(origin, pointer_id, x, y) => {
-                // Arms for the next gesture: any flag left by a prior
-                // drag's trailing click/dblclick must not leak into this one.
+                // Defensive reset: `schedule_just_dragged_clear` already
+                // guarantees the flag from a prior drag is gone before any
+                // unrelated later gesture, but a fresh press should never
+                // see it lingering even in that already-cleared state.
                 self.just_dragged = false;
                 if self.interactions_locked() || self.drag.is_some() {
                     return false;
@@ -934,35 +1023,13 @@ impl Component for App {
                 }
 
                 let target = Self::hit_test_drop_target(x, y);
-                let moved = match target {
-                    Some(DropTarget::Tableau(pile)) => self.game.move_selected_to_tableau(pile),
-                    Some(DropTarget::Foundation(pile)) => {
-                        self.game.move_selected_to_foundation(pile)
-                    }
-                    None => false,
-                };
+                let outcome = self.resolve_drop(target);
                 self.just_dragged = true;
-                if moved {
-                    self.status = match target {
-                        Some(DropTarget::Tableau(pile)) => {
-                            format!("Moved cards to tableau column {}.", pile + 1)
-                        }
-                        Some(DropTarget::Foundation(pile)) => {
-                            format!("Placed card on foundation {}.", pile + 1)
-                        }
-                        None => unreachable!("a successful move always resolves a target"),
-                    };
-                } else {
+                Self::schedule_just_dragged_clear(ctx);
+                if !outcome.moved {
                     self.game.selected = tracker.selection_before;
-                    self.status = match target {
-                        Some(DropTarget::Tableau(pile)) if self.game.tableau[pile].is_empty() => {
-                            "Only a King can move into an empty tableau column.".to_string()
-                        }
-                        Some(DropTarget::Tableau(_)) => "Illegal tableau move.".to_string(),
-                        Some(DropTarget::Foundation(_)) => "Illegal foundation move.".to_string(),
-                        None => "Illegal tableau move.".to_string(),
-                    };
                 }
+                self.status = outcome.status;
             }
             Msg::PointerCancel(pointer_id) => {
                 let Some(tracker) = self.drag.take() else {
@@ -974,6 +1041,10 @@ impl Component for App {
                 }
                 self.game.selected = tracker.selection_before;
                 self.hover_target = None;
+            }
+            Msg::ClearJustDragged => {
+                self.just_dragged = false;
+                return false;
             }
         }
 
@@ -1277,9 +1348,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardSteps, DragPhase, PointerPoint, advance_drag_phase, exceeds_tap_threshold, fan_offsets,
+        App, CardSteps, DragPhase, DropTarget, EMPTY_TABLEAU_NEEDS_KING, ILLEGAL_FOUNDATION_MOVE,
+        ILLEGAL_TABLEAU_MOVE, PointerPoint, advance_drag_phase, exceeds_tap_threshold, fan_offsets,
     };
-    use solitare::game::{Card, Suit, TableauCard};
+    use solitare::game::{Card, GameState, Selection, Suit, TableauCard};
 
     fn card(rank: u8, face_up: bool) -> TableauCard {
         TableauCard {
@@ -1386,5 +1458,120 @@ mod tests {
         // resurrect tap behavior mid-gesture.
         let phase = advance_drag_phase(DragPhase::Dragging, start, point(10.5, 10.0));
         assert_eq!(phase, DragPhase::Dragging);
+    }
+
+    fn spade(rank: u8) -> Card {
+        Card {
+            suit: Suit::Spades,
+            rank,
+        }
+    }
+
+    fn heart(rank: u8) -> Card {
+        Card {
+            suit: Suit::Hearts,
+            rank,
+        }
+    }
+
+    fn app_with(game: GameState) -> App {
+        App {
+            game,
+            status: String::new(),
+            end_state: None,
+            help_expanded: false,
+            victory_gold_award: 0,
+            victory_rain_dismissed: false,
+            all_to_temple_running: false,
+            all_to_temple_timeout: None,
+            key_listener: None,
+            drag: None,
+            just_dragged: false,
+            hover_target: None,
+        }
+    }
+
+    #[test]
+    fn resolve_drop_onto_empty_tableau_column_requires_a_king() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(3)));
+
+        assert!(!outcome.moved);
+        assert_eq!(outcome.status, EMPTY_TABLEAU_NEEDS_KING);
+    }
+
+    #[test]
+    fn resolve_drop_rejects_a_mismatched_tableau_stack() {
+        let mut game = GameState::empty();
+        game.tableau[0].push(card(9, true));
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(0)));
+
+        assert!(!outcome.moved);
+        assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
+    }
+
+    #[test]
+    fn resolve_drop_places_a_legal_tableau_run_and_words_it_like_a_click() {
+        let mut game = GameState::empty();
+        game.tableau[1].push(TableauCard {
+            card: heart(6),
+            face_up: true,
+            zeus_revealed: false,
+        });
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(1)));
+
+        assert!(outcome.moved);
+        assert_eq!(outcome.status, "Moved cards to tableau column 2.");
+    }
+
+    #[test]
+    fn resolve_drop_rejects_a_non_ace_onto_an_empty_foundation() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Foundation(0)));
+
+        assert!(!outcome.moved);
+        assert_eq!(outcome.status, ILLEGAL_FOUNDATION_MOVE);
+    }
+
+    #[test]
+    fn resolve_drop_places_an_ace_and_words_it_like_a_click() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(1));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Foundation(0)));
+
+        assert!(outcome.moved);
+        assert_eq!(outcome.status, "Placed card on foundation 1.");
+    }
+
+    #[test]
+    fn resolve_drop_with_no_target_is_an_illegal_tableau_move() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        let outcome = app.resolve_drop(None);
+
+        assert!(!outcome.moved);
+        assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
     }
 }
