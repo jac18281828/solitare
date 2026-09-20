@@ -141,9 +141,9 @@ body::before {
     transition: opacity 0.35s ease;
 }
 
-/* Full-bleed keeps background-position anchored like the layer each
-   pseudo-element replaces; mask-image/-size/-position track it so the
-   temple fades on all four edges instead of stopping at a fixed box. */
+/* mask-image tracks each selector's own background-image/-size/-position
+   (full-bleed on .felt-art::after, a side band on .top-board::after) so
+   the temple fades at the painting's edges, not the box's. */
 .felt-art::after,
 .top-board::after {
     content: "";
@@ -491,13 +491,20 @@ body::before {
     gap: var(--pile-gap);
     justify-content: center;
     align-items: start;
+    /* Query-container so ::after's mask-size can derive its height from
+       cqw, matching the temple painting's own aspect ratio. */
+    container-type: inline-size;
+}
+
+.top-board::before,
+.top-board::after {
+    inset: -6px 0 auto;
+    height: calc(var(--card-h) + 44px);
 }
 
 .top-board::before {
     content: "";
     position: absolute;
-    inset: -6px 0 auto;
-    height: calc(var(--card-h) + 44px);
     z-index: 0;
     pointer-events: none;
     opacity: 0;
@@ -509,11 +516,12 @@ body::before {
 }
 
 .top-board::after {
-    inset: -6px 0 auto;
-    height: calc(var(--card-h) + 44px);
     background-size: 20% auto;
     background-position: right center;
-    mask-size: 20% auto;
+    /* min() caps the mask at the band height: past ~844px the painting is
+       taller than the band, and an uncapped cqw height would push the
+       fade past the clip edge into a hard line. */
+    mask-size: 20% min(calc(20cqw * 661 / 533), 100%);
     mask-position: right center;
 }
 
