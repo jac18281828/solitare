@@ -10,11 +10,11 @@
     --wine: #8a2134;
     --charcoal: #1f2530;
     --art-dionysus: url("resources/dionysus.jpg");
-    --art-laurel: url("resources/laurel.png");
+    --art-laurel: url("resources/laurel.webp");
     --art-temple: url("resources/temple_gold.jpg");
     --art-nymph-blonde: url("resources/nymph_blonde.jpg");
     --art-nymph-brunette: url("resources/nymph_brunette.jpg");
-    --art-coin: url("resources/coin.png");
+    --art-coin: url("resources/coin.webp");
     --art-temple-with-coin: url("resources/temple_with_coin.jpg");
 
     --body-pad: clamp(8px, 2vw, 24px);
