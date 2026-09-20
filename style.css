@@ -10,11 +10,11 @@
     --wine: #8a2134;
     --charcoal: #1f2530;
     --art-dionysus: url("resources/dionysus.jpg");
-    --art-laurel: url("resources/laurel.jpg");
+    --art-laurel: url("resources/laurel.png");
     --art-temple: url("resources/temple_gold.jpg");
     --art-nymph-blonde: url("resources/nymph_blonde.jpg");
     --art-nymph-brunette: url("resources/nymph_brunette.jpg");
-    --art-coin: url("resources/coin.jpg");
+    --art-coin: url("resources/coin.png");
     --art-temple-with-coin: url("resources/temple_with_coin.jpg");
 
     --body-pad: clamp(8px, 2vw, 24px);
@@ -128,13 +128,30 @@ body::before {
     z-index: 0;
     background-image:
         radial-gradient(circle at 35% 12%, rgba(255, 245, 203, 0.14), transparent 28%),
-        var(--art-laurel),
-        var(--art-temple);
-    background-size: auto, 34% auto, 34% auto;
-    background-position: center top, 2% 42%, 98% 42%;
+        var(--art-laurel);
+    background-size: auto, 34% auto;
+    background-position: center top, 2% 42%;
     background-repeat: no-repeat;
     opacity: 0;
-    mix-blend-mode: screen;
+    transition: opacity 0.35s ease;
+}
+
+/* The temple backdrop lives in its own box, sized to the painting's own
+   aspect ratio, so mask-image can feather its edges without touching the
+   laurel layer beside it. */
+.felt-art::after {
+    content: "";
+    position: absolute;
+    right: 2%;
+    top: 42%;
+    width: 34%;
+    aspect-ratio: 533 / 661;
+    pointer-events: none;
+    background-image: var(--art-temple);
+    background-size: cover;
+    background-repeat: no-repeat;
+    mask-image: radial-gradient(ellipse at center, black 55%, transparent 100%);
+    opacity: 0;
     transition: opacity 0.35s ease;
 }
 
@@ -181,7 +198,6 @@ body::before {
     box-shadow:
         0 8px 14px rgba(0, 0, 0, 0.3),
         inset 0 0 0 1px rgba(247, 229, 180, 0.26);
-    opacity: 0.82;
     filter: saturate(1.06) contrast(1.04);
 }
 
@@ -224,16 +240,14 @@ body::before {
     border-color: rgba(236, 202, 118, 0.62);
 }
 
-.ended .felt-art {
+.ended .felt-art,
+.ended .felt-art::after {
     opacity: 0.54;
 }
 
-.lost .felt-art {
+.lost .felt-art,
+.lost .felt-art::after {
     opacity: 0.12;
-}
-
-.lost .host-nymphs {
-    opacity: 0.18;
 }
 
 .lost .tableau-scroll,
@@ -298,9 +312,7 @@ body::before {
     background-position: center;
     background-repeat: no-repeat;
     background-color: transparent;
-    mix-blend-mode: darken;
-    filter: saturate(1.2) contrast(1.1);
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    filter: saturate(1.2) contrast(1.1) drop-shadow(2px 3px 3px rgba(0, 0, 0, 0.35));
     opacity: 0;
     will-change: transform, opacity;
     animation: coin-fall 1.8s linear infinite;
@@ -349,6 +361,9 @@ body::before {
     aspect-ratio: 1;
     border-radius: 999px;
     border: 1px solid rgba(223, 191, 103, 0.72);
+    /* Longhand: the `background` shorthand would reset each medallion's
+       own background-image rule (.art-laurel, .art-dionysus, .art-temple). */
+    background-color: var(--ivory);
     background-size: cover;
     background-position: center;
     box-shadow:
@@ -473,14 +488,36 @@ body::before {
     z-index: 0;
     pointer-events: none;
     opacity: 0;
-    background-image: var(--art-laurel), var(--art-temple);
+    background-image: var(--art-laurel);
     background-repeat: no-repeat;
-    background-size: 20% auto, 20% auto;
-    background-position: left center, right center;
+    background-size: 20% auto;
+    background-position: left center;
     transition: opacity 0.35s ease;
 }
 
-.ended .top-board::before {
+/* The temple backdrop lives in its own box, sized to the painting's own
+   aspect ratio, so mask-image can feather its edges without touching the
+   laurel layer beside it. */
+.top-board::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20%;
+    aspect-ratio: 533 / 661;
+    z-index: 0;
+    pointer-events: none;
+    background-image: var(--art-temple);
+    background-size: cover;
+    background-repeat: no-repeat;
+    mask-image: radial-gradient(ellipse at center, black 55%, transparent 100%);
+    opacity: 0;
+    transition: opacity 0.35s ease;
+}
+
+.ended .top-board::before,
+.ended .top-board::after {
     opacity: 0.22;
 }
 
@@ -836,7 +873,6 @@ body::before {
 
     .host-nymph {
         width: clamp(58px, 12vw, 94px);
-        opacity: 0.78;
     }
 }
 
