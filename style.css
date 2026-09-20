@@ -594,6 +594,13 @@ body::before {
     transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
+/* Only face-up cards can be dragged; html's document-wide
+   touch-action: manipulation stays on .card.back so a swipe starting on a
+   hidden or stock card still scrolls the page. */
+.card.face {
+    touch-action: none;
+}
+
 @media (hover: hover) {
     .card:hover {
         transform: translateY(-2px);
@@ -877,6 +884,37 @@ body::before {
     /* Scope each layer's own stacking so a face-down card's medallion never
        paints above the face-up cards fanned on top of it. */
     isolation: isolate;
+}
+
+/* Restrained drop-target cue: a gold hairline, no glow or pulse, matching
+   the felt-and-gold palette rather than the casino look Phase 1 removed. */
+.tableau-pile.drop-target,
+.pile-empty.drop-target,
+.card.drop-target {
+    outline: 2px solid rgba(227, 200, 119, 0.75);
+    outline-offset: 3px;
+}
+
+/* The dragged run's ghost: one fixed layer outside .tableau-scroll so its
+   overflow-x: hidden never clips it, following the pointer by transform
+   alone so nothing else on the board reflows mid-drag. */
+.drag-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: var(--card-w);
+    height: var(--card-h);
+    pointer-events: none;
+    z-index: 60;
+}
+
+.drag-overlay-card {
+    position: absolute;
+    inset: 0;
+    /* Fans the run the same way the board does, via --fan-up. */
+    top: calc(var(--fan-index, 0) * var(--fan-up));
+    opacity: 0.94;
+    box-shadow: 0 16px 24px rgba(0, 0, 0, 0.4);
 }
 
 .help-strip {

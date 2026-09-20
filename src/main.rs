@@ -4,7 +4,7 @@ use log::info;
 use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection, TableauCard};
 use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent as DomKeyboardEvent;
-use yew::events::MouseEvent;
+use yew::events::{MouseEvent, PointerEvent};
 use yew::{Component, Context, Html, Renderer, classes, html};
 
 const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
@@ -66,6 +66,121 @@ fn fan_offsets(pile: &[TableauCard]) -> TableauFan {
     }
 }
 
+/// A point in CSS pixels from a pointer event's `clientX`/`clientY`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PointerPoint {
+    x: f64,
+    y: f64,
+}
+
+/// A pointer that travels this far or less between `pointerdown` and
+/// `pointerup` is a tap and must produce exactly the click behavior for its
+/// element; past it, the gesture is a drag.
+const TAP_THRESHOLD_PX: f64 = 3.0;
+
+fn exceeds_tap_threshold(start: PointerPoint, current: PointerPoint) -> bool {
+    (current.x - start.x).hypot(current.y - start.y) > TAP_THRESHOLD_PX
+}
+
+/// A gesture stays a drag for the rest of its life once it crosses the tap
+/// threshold, even if the pointer drifts back within range of `start`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DragPhase {
+    Pressed,
+    Dragging,
+}
+
+fn advance_drag_phase(phase: DragPhase, start: PointerPoint, current: PointerPoint) -> DragPhase {
+    if phase == DragPhase::Dragging || exceeds_tap_threshold(start, current) {
+        DragPhase::Dragging
+    } else {
+        DragPhase::Pressed
+    }
+}
+
+/// A destination a drop can land on, resolved by hit-testing the DOM under
+/// the pointer (`App::hit_test_drop_target`). Never built in a unit test —
+/// browser behavior is proven in the drag-input prompt's §8, not here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DropTarget {
+    Tableau(usize),
+    Foundation(usize),
+}
+
+/// One pointer's press-to-release gesture on a card or run. `origin` is the
+/// selection the gesture would pick up; `selection_before` is whatever was
+/// selected before the gesture started, restored on cancel or an illegal
+/// drop so a failed gesture leaves no trace.
+#[derive(Clone, Debug, PartialEq)]
+struct DragTracker {
+    pointer_id: i32,
+    origin: Selection,
+    selection_before: Option<Selection>,
+    start: PointerPoint,
+    current: PointerPoint,
+    phase: DragPhase,
+}
+
+impl DragTracker {
+    fn new(
+        pointer_id: i32,
+        origin: Selection,
+        selection_before: Option<Selection>,
+        at: PointerPoint,
+    ) -> Self {
+        Self {
+            pointer_id,
+            origin,
+            selection_before,
+            start: at,
+            current: at,
+            phase: DragPhase::Pressed,
+        }
+    }
+
+    fn moved(&self, at: PointerPoint) -> Self {
+        Self {
+            pointer_id: self.pointer_id,
+            origin: self.origin,
+            selection_before: self.selection_before,
+            start: self.start,
+            current: at,
+            phase: advance_drag_phase(self.phase, self.start, at),
+        }
+    }
+}
+
+/// The four pointer callbacks a draggable card wires onto its button,
+/// bundled so `view_face_card` takes one argument instead of four.
+struct PointerCallbacks {
+    down: yew::Callback<PointerEvent>,
+    move_: yew::Callback<PointerEvent>,
+    up: yew::Callback<PointerEvent>,
+    cancel: yew::Callback<PointerEvent>,
+}
+
+/// Ties every later pointer event in this gesture to the element under the
+/// initial press, so the drag survives the pointer leaving the card's box.
+fn capture_pointer(event: &PointerEvent) {
+    if let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+    {
+        let _ = target.set_pointer_capture(event.pointer_id());
+    }
+}
+
+/// Releases capture on `pointerup` and `pointercancel`; safe to call even
+/// if the browser already dropped capture on its own.
+fn release_pointer(event: &PointerEvent) {
+    if let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+    {
+        let _ = target.release_pointer_capture(event.pointer_id());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EndState {
     ZeusThunder,
@@ -90,6 +205,14 @@ pub struct App {
     all_to_temple_running: bool,
     all_to_temple_timeout: Option<Timeout>,
     key_listener: Option<EventListener>,
+    /// The pointer gesture in progress, if any; `None` outside a press.
+    drag: Option<DragTracker>,
+    /// Set when a drag resolves at `pointerup`, so the trailing synthetic
+    /// click (and, for the tap-then-drag sequence, a trailing dblclick) is
+    /// swallowed instead of re-running the click model on the same input.
+    just_dragged: bool,
+    /// The drop destination currently under the pointer, for highlighting.
+    hover_target: Option<DropTarget>,
 }
 
 pub enum Msg {
@@ -109,6 +232,10 @@ pub enum Msg {
     SwitchDrawMode,
     ToggleHelp,
     DismissVictoryRain,
+    PointerDown(Selection, i32, f64, f64),
+    PointerMove(i32, f64, f64),
+    PointerUp(i32, f64, f64),
+    PointerCancel(i32),
 }
 
 impl App {
@@ -144,6 +271,123 @@ impl App {
         self.status = format!("Dionysus honors you with {reward} gold.");
     }
 
+    /// Builds the pointer handlers a draggable card wires onto its button.
+    /// Capture/release happen here, at the moment the raw event is in hand;
+    /// `update` only ever sees the extracted coordinates.
+    fn pointer_callbacks(ctx: &Context<Self>, origin: Selection) -> PointerCallbacks {
+        let link = ctx.link();
+        let down = link.callback(move |event: PointerEvent| {
+            capture_pointer(&event);
+            Msg::PointerDown(
+                origin,
+                event.pointer_id(),
+                event.client_x() as f64,
+                event.client_y() as f64,
+            )
+        });
+        let move_ = link.callback(|event: PointerEvent| {
+            Msg::PointerMove(
+                event.pointer_id(),
+                event.client_x() as f64,
+                event.client_y() as f64,
+            )
+        });
+        let up = link.callback(|event: PointerEvent| {
+            release_pointer(&event);
+            Msg::PointerUp(
+                event.pointer_id(),
+                event.client_x() as f64,
+                event.client_y() as f64,
+            )
+        });
+        let cancel = link.callback(|event: PointerEvent| {
+            release_pointer(&event);
+            Msg::PointerCancel(event.pointer_id())
+        });
+        PointerCallbacks {
+            down,
+            move_,
+            up,
+            cancel,
+        }
+    }
+
+    /// Reads whatever tableau column or foundation lies under a client-space
+    /// point via `elementFromPoint`. DOM-dependent, so it stays out of
+    /// `cargo test`; proven in the browser instead.
+    fn hit_test_drop_target(x: f64, y: f64) -> Option<DropTarget> {
+        let document = web_sys::window()?.document()?;
+        let element = document.element_from_point(x as f32, y as f32)?;
+        let target = element
+            .closest("[data-drop-tableau], [data-drop-foundation]")
+            .ok()??;
+        if let Some(value) = target.get_attribute("data-drop-tableau") {
+            return value.parse().ok().map(DropTarget::Tableau);
+        }
+        let value = target.get_attribute("data-drop-foundation")?;
+        value.parse().ok().map(DropTarget::Foundation)
+    }
+
+    /// The cards a drag from `origin` carries: the exact selection payload,
+    /// read straight from `GameState` rather than tracked separately.
+    fn dragged_cards(&self, origin: Selection) -> Vec<Card> {
+        match origin {
+            Selection::Waste => self.game.waste.last().copied().into_iter().collect(),
+            Selection::Foundation { pile } => self
+                .game
+                .foundations
+                .get(pile)
+                .and_then(|cards| cards.last())
+                .copied()
+                .into_iter()
+                .collect(),
+            Selection::Tableau { pile, index } => self
+                .game
+                .tableau
+                .get(pile)
+                .and_then(|cards| cards.get(index..))
+                .map(|run| run.iter().map(|card| card.card).collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The dragged run's ghost, a single layer outside `.tableau-scroll` that
+    /// follows the pointer by `transform` alone so the clipped, scrollable
+    /// column never has to reflow mid-drag.
+    fn view_drag_overlay(&self) -> Html {
+        let Some(tracker) = self
+            .drag
+            .as_ref()
+            .filter(|tracker| tracker.phase == DragPhase::Dragging)
+        else {
+            return Html::default();
+        };
+
+        let cards = self.dragged_cards(tracker.origin);
+        let overlay_style = format!(
+            "transform: translate({}px, {}px) translate(-50%, -50%);",
+            tracker.current.x, tracker.current.y
+        );
+
+        html! {
+            <div class="drag-overlay" style={overlay_style} aria-hidden="true">
+                { for cards.iter().enumerate().map(|(index, card)| {
+                    let mut card_classes = classes!("card", "face", "drag-overlay-card");
+                    card_classes.push(if card.is_red() { "red" } else { "black" });
+                    html! {
+                        <div class={card_classes} style={format!("--fan-index: {index};")}>
+                            <span class="corner top">
+                                <span class="rank">{ card.rank_label() }</span>
+                                <span class="suit">{ card.suit.symbol() }</span>
+                            </span>
+                        </div>
+                    }
+                }) }
+            </div>
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn view_face_card(
         &self,
         card: Card,
@@ -151,6 +395,9 @@ impl App {
         zeus_revealed: bool,
         on_click: yew::Callback<MouseEvent>,
         on_double_click: yew::Callback<MouseEvent>,
+        pointer: PointerCallbacks,
+        drop_foundation: Option<usize>,
+        drop_target: bool,
     ) -> Html {
         let mut card_classes = classes!("card", "face");
         card_classes.push(if card.is_red() { "red" } else { "black" });
@@ -162,6 +409,9 @@ impl App {
         }
         if zeus_revealed {
             card_classes.push("zeus-revealed");
+        }
+        if drop_target {
+            card_classes.push("drop-target");
         }
         let center_art = if matches!(card.rank, 11..=13) {
             "art-dionysus"
@@ -177,8 +427,13 @@ impl App {
                 class={card_classes}
                 onclick={on_click}
                 ondblclick={on_double_click}
+                onpointerdown={pointer.down}
+                onpointermove={pointer.move_}
+                onpointerup={pointer.up}
+                onpointercancel={pointer.cancel}
                 aria-label={format!("{} of {}", card.rank_label(), card.suit.latin_name())}
                 disabled={self.interactions_locked()}
+                data-drop-foundation={drop_foundation.map(|pile| pile.to_string())}
             >
                 <span class="corner top">
                     <span class="rank">{ card.rank_label() }</span>
@@ -224,18 +479,34 @@ impl App {
     fn view_foundation_slot(&self, ctx: &Context<Self>, pile: usize) -> Html {
         let on_click = ctx.link().callback(move |_| Msg::ClickFoundation(pile));
         let selected = self.game.is_selected(Selection::Foundation { pile });
+        let drop_target = self.hover_target == Some(DropTarget::Foundation(pile));
 
         if let Some(card) = self.game.foundations[pile].last().copied() {
             let on_double_click = ctx.link().callback(|_| Msg::Noop);
-            self.view_face_card(card, selected, false, on_click, on_double_click)
+            let pointer = Self::pointer_callbacks(ctx, Selection::Foundation { pile });
+            self.view_face_card(
+                card,
+                selected,
+                false,
+                on_click,
+                on_double_click,
+                pointer,
+                Some(pile),
+                drop_target,
+            )
         } else {
             html! {
                 <button
                     type="button"
-                    class={classes!("pile-empty", selected.then_some("selected"))}
+                    class={classes!(
+                        "pile-empty",
+                        selected.then_some("selected"),
+                        drop_target.then_some("drop-target"),
+                    )}
                     onclick={on_click}
                     aria-label={format!("Foundation {}", pile + 1)}
                     disabled={self.interactions_locked()}
+                    data-drop-foundation={pile.to_string()}
                 >
                     <span>{ "TEMPLE" }</span>
                     <span class="tiny">{ "ACE UP" }</span>
@@ -262,6 +533,9 @@ impl Component for App {
             all_to_temple_running: false,
             all_to_temple_timeout: None,
             key_listener: None,
+            drag: None,
+            just_dragged: false,
+            hover_target: None,
         }
     }
 
@@ -388,6 +662,9 @@ impl Component for App {
                 }
             }
             Msg::ClickWaste => {
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.select_waste() {
                     if let Some(card) = self.game.selected_card() {
                         self.status = format!("Selected waste card {}.", Self::describe_card(card));
@@ -399,6 +676,9 @@ impl Component for App {
                 }
             }
             Msg::DoubleClickWaste => {
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.waste.is_empty() {
                     self.status = "Waste pile is empty.".to_string();
                 } else {
@@ -412,6 +692,9 @@ impl Component for App {
                 }
             }
             Msg::ClickFoundation(pile) => {
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.selected.is_some() {
                     if self.game.move_selected_to_foundation(pile) {
                         self.status = format!("Placed card on foundation {}.", pile + 1);
@@ -439,6 +722,9 @@ impl Component for App {
                 }
             }
             Msg::ClickTableauCard(pile, index) => {
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.selected.is_some() {
                     if self.game.move_selected_to_tableau(pile) {
                         self.status = format!("Moved cards to tableau column {}.", pile + 1);
@@ -464,6 +750,14 @@ impl Component for App {
                 }
             }
             Msg::DoubleClickTableauCard(pile, index) => {
+                // Guarded like Click*: a drag's mouseup can synthesize a
+                // trailing click AND dblclick on the source card (most
+                // visibly in the tap-then-drag sequence), and an unguarded
+                // dblclick here would reselect/promote against a pile the
+                // drag just changed.
+                if self.just_dragged {
+                    return false;
+                }
                 if self.game.select_tableau(pile, index) {
                     if self.game.move_selected_to_any_foundation() {
                         self.status = "Moved top tableau card to a foundation.".to_string();
@@ -569,6 +863,118 @@ impl Component for App {
                     return false;
                 }
             }
+            Msg::PointerDown(origin, pointer_id, x, y) => {
+                // Arms for the next gesture: any flag left by a prior
+                // drag's trailing click/dblclick must not leak into this one.
+                self.just_dragged = false;
+                if self.interactions_locked() || self.drag.is_some() {
+                    return false;
+                }
+                let selection_before = self.game.selected;
+                self.drag = Some(DragTracker::new(
+                    pointer_id,
+                    origin,
+                    selection_before,
+                    PointerPoint { x, y },
+                ));
+                return false;
+            }
+            Msg::PointerMove(pointer_id, x, y) => {
+                let Some(tracker) = self.drag.as_ref() else {
+                    return false;
+                };
+                if tracker.pointer_id != pointer_id {
+                    return false;
+                }
+                let was_dragging = tracker.phase == DragPhase::Dragging;
+                let advanced = tracker.moved(PointerPoint { x, y });
+                let origin = advanced.origin;
+                let just_started = !was_dragging && advanced.phase == DragPhase::Dragging;
+                self.drag = Some(advanced);
+
+                // The select_* calls toggle an already-active selection off,
+                // so a drag that starts on an already-selected card must
+                // skip reselecting it rather than deselect it mid-gesture.
+                if just_started && !self.game.is_selected(origin) {
+                    match origin {
+                        Selection::Waste => {
+                            self.game.select_waste();
+                        }
+                        Selection::Foundation { pile } => {
+                            self.game.select_foundation(pile);
+                        }
+                        Selection::Tableau { pile, index } => {
+                            self.game.select_tableau(pile, index);
+                        }
+                    }
+                }
+
+                self.hover_target = self
+                    .drag
+                    .as_ref()
+                    .filter(|tracker| tracker.phase == DragPhase::Dragging)
+                    .and_then(|_| Self::hit_test_drop_target(x, y));
+                // Selecting or repositioning the overlay never wins or
+                // stalls the game; skip the shared recheck below.
+                return true;
+            }
+            Msg::PointerUp(pointer_id, x, y) => {
+                let Some(tracker) = self.drag.take() else {
+                    return false;
+                };
+                if tracker.pointer_id != pointer_id {
+                    self.drag = Some(tracker);
+                    return false;
+                }
+                self.hover_target = None;
+                if tracker.phase == DragPhase::Pressed {
+                    // A tap: leave game state untouched for the browser's
+                    // own click/dblclick to drive as it does today.
+                    return false;
+                }
+
+                let target = Self::hit_test_drop_target(x, y);
+                let moved = match target {
+                    Some(DropTarget::Tableau(pile)) => self.game.move_selected_to_tableau(pile),
+                    Some(DropTarget::Foundation(pile)) => {
+                        self.game.move_selected_to_foundation(pile)
+                    }
+                    None => false,
+                };
+                self.just_dragged = true;
+                if moved {
+                    self.status = match target {
+                        Some(DropTarget::Tableau(pile)) => {
+                            format!("Moved cards to tableau column {}.", pile + 1)
+                        }
+                        Some(DropTarget::Foundation(pile)) => {
+                            format!("Placed card on foundation {}.", pile + 1)
+                        }
+                        None => unreachable!("a successful move always resolves a target"),
+                    };
+                } else {
+                    self.game.selected = tracker.selection_before;
+                    self.status = match target {
+                        Some(DropTarget::Tableau(pile)) if self.game.tableau[pile].is_empty() => {
+                            "Only a King can move into an empty tableau column.".to_string()
+                        }
+                        Some(DropTarget::Tableau(_)) => "Illegal tableau move.".to_string(),
+                        Some(DropTarget::Foundation(_)) => "Illegal foundation move.".to_string(),
+                        None => "Illegal tableau move.".to_string(),
+                    };
+                }
+            }
+            Msg::PointerCancel(pointer_id) => {
+                let Some(tracker) = self.drag.take() else {
+                    return false;
+                };
+                if tracker.pointer_id != pointer_id {
+                    self.drag = Some(tracker);
+                    return false;
+                }
+                self.game.selected = tracker.selection_before;
+                self.hover_target = None;
+            }
         }
 
         if self.game.won && self.end_state.is_none() {
@@ -633,7 +1039,17 @@ impl Component for App {
 
         let waste_view = if let Some(card) = self.game.waste.last().copied() {
             let selected = self.game.is_selected(Selection::Waste);
-            self.view_face_card(card, selected, false, click_waste, double_click_waste)
+            let pointer = Self::pointer_callbacks(ctx, Selection::Waste);
+            self.view_face_card(
+                card,
+                selected,
+                false,
+                click_waste,
+                double_click_waste,
+                pointer,
+                None,
+                false,
+            )
         } else {
             html! {
                 <button
@@ -692,12 +1108,20 @@ impl Component for App {
                         );
 
                         let card_html = if tableau_card.face_up {
+                            let origin = Selection::Tableau {
+                                pile: pile_index,
+                                index: card_index,
+                            };
+                            let pointer = Self::pointer_callbacks(ctx, origin);
                             self.view_face_card(
                                 tableau_card.card,
                                 selected,
                                 tableau_card.zeus_revealed,
                                 on_click,
                                 on_double_click,
+                                pointer,
+                                None,
+                                false,
                             )
                         } else {
                             let block_click = ctx.link().callback(|event: MouseEvent| {
@@ -720,12 +1144,16 @@ impl Component for App {
                 if pile.is_empty() {
                     pile_classes.push("empty");
                 }
+                if self.hover_target == Some(DropTarget::Tableau(pile_index)) {
+                    pile_classes.push("drop-target");
+                }
 
                 html! {
                     <div class="tableau-column">
                         <div class="pile-label">{ format!("Column {}", pile_index + 1) }</div>
                         <div
                             class={pile_classes}
+                            data-drop-tableau={pile_index.to_string()}
                             onclick={
                                 if locked {
                                     ctx.link().callback(|_| Msg::Noop)
@@ -826,7 +1254,7 @@ impl Component for App {
                 </section>
 
                 <section class={classes!("help-strip", (!self.help_expanded).then_some("collapsed"))}>
-                    <span>{ "Click to select and move." }</span>
+                    <span>{ "Click to select and move, or drag a card straight to its destination." }</span>
                     <span>{ "Double-click waste/top tableau card to send it to a temple." }</span>
                     <span>{ "Build tableau in descending alternating colors." }</span>
                     <span>{ "Zeus' Vision reveals hidden cards and ends the game." }</span>
@@ -834,6 +1262,7 @@ impl Component for App {
                     <span>{ "Keys: D or Enter draws, Space sends one to temple, A sends all." }</span>
                 </section>
                 <span class="version-tag" aria-hidden="true">{ concat!("v", env!("CARGO_PKG_VERSION")) }</span>
+                { self.view_drag_overlay() }
             </main>
         }
     }
@@ -847,7 +1276,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{CardSteps, fan_offsets};
+    use super::{
+        CardSteps, DragPhase, PointerPoint, advance_drag_phase, exceeds_tap_threshold, fan_offsets,
+    };
     use solitare::game::{Card, Suit, TableauCard};
 
     fn card(rank: u8, face_up: bool) -> TableauCard {
@@ -902,5 +1333,58 @@ mod tests {
 
         assert!(fan.cards.is_empty());
         assert_eq!(fan.pile, CardSteps { down: 0, up: 0 });
+    }
+
+    fn point(x: f64, y: f64) -> PointerPoint {
+        PointerPoint { x, y }
+    }
+
+    #[test]
+    fn two_pixels_of_travel_is_a_tap() {
+        let start = point(0.0, 0.0);
+        assert!(!exceeds_tap_threshold(start, point(2.0, 0.0)));
+    }
+
+    #[test]
+    fn exactly_three_pixels_of_travel_is_still_a_tap() {
+        let start = point(0.0, 0.0);
+        assert!(!exceeds_tap_threshold(start, point(3.0, 0.0)));
+    }
+
+    #[test]
+    fn six_pixels_of_travel_is_a_drag() {
+        let start = point(0.0, 0.0);
+        assert!(exceeds_tap_threshold(start, point(6.0, 0.0)));
+    }
+
+    #[test]
+    fn diagonal_travel_uses_straight_line_distance() {
+        // 3px right and 3px down is well past 3px of straight-line travel,
+        // even though each axis alone would read as a tap.
+        let start = point(0.0, 0.0);
+        assert!(exceeds_tap_threshold(start, point(3.0, 3.0)));
+    }
+
+    #[test]
+    fn drag_phase_stays_pressed_under_threshold() {
+        let start = point(10.0, 10.0);
+        let phase = advance_drag_phase(DragPhase::Pressed, start, point(11.0, 10.0));
+        assert_eq!(phase, DragPhase::Pressed);
+    }
+
+    #[test]
+    fn drag_phase_advances_past_threshold() {
+        let start = point(10.0, 10.0);
+        let phase = advance_drag_phase(DragPhase::Pressed, start, point(20.0, 10.0));
+        assert_eq!(phase, DragPhase::Dragging);
+    }
+
+    #[test]
+    fn drag_phase_never_reverts_to_pressed() {
+        let start = point(10.0, 10.0);
+        // Once dragging, drifting back within 3px of the start must not
+        // resurrect tap behavior mid-gesture.
+        let phase = advance_drag_phase(DragPhase::Dragging, start, point(10.5, 10.0));
+        assert_eq!(phase, DragPhase::Dragging);
     }
 }

@@ -5,7 +5,8 @@ Ancient Greek and Roman themed Klondike solitaire built with Rust + Yew + WebAss
 ## Features
 
 - Full 52-card Klondike deal (7 tableau columns, stock, waste, 4 foundations)
-- Click-to-select and click-to-move interactions
+- Click-to-select and click-to-move interactions, or drag a card or run
+  straight to its destination on touch and mouse
 - Double-click waste or top tableau card to auto-send to foundation
 - Foundation and tableau legality checks
 - Auto-flip hidden tableau cards after moves
@@ -25,8 +26,8 @@ Ancient Greek and Roman themed Klondike solitaire built with Rust + Yew + WebAss
 ## Controls
 
 - Click `Stock` to draw (or redeal waste back into stock)
-- Click a card/run to select it
-- Click destination tableau/foundation to move selected card(s)
+- Click a card/run to select it, or drag it straight to a destination
+- Click a destination tableau/foundation to move a selected card
 - `Auto To Temple` sends one available card to foundation
 - `New Shuffle` starts a fresh game
 
