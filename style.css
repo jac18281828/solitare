@@ -21,9 +21,17 @@
     --slate-mid: #3c453e;
     --slate-deep: #232824;
 
-    /* feTurbulence grain, alpha baked into the SVG so it composites under
-       Zeus' Vision's wash without a second element opacity thinning it. */
-    --grain-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='24' height='24' filter='url(%23n)'/%3E%3C/svg%3E");
+    /* feTurbulence grain as a matched light+dark pair, in sRGB space so
+       the matrix math matches the rendered pixels: each rect's alpha is
+       the noise's deviation from its own measured mean (0.42), clamped to
+       zero on one side, so the texture adds variance on both a light face
+       and a dark back without dragging either surface's mean luminance up
+       or down. Darkening has less headroom on a dark back than lightening
+       has on a light face, so the dark gain (0.225) outweighs the light
+       gain (0.10) to net near zero on both. Both gains are sized so a
+       pixel's alpha cannot clear the settled 6% ceiling that keeps the
+       grain felt, never seen as a pattern. */
+    --grain-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cfilter id='w' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0.10 0 0 -0.0419'/%3E%3C/filter%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.225 0 0 0.0943'/%3E%3C/filter%3E%3Crect width='24' height='24' filter='url(%23w)'/%3E%3Crect width='24' height='24' filter='url(%23b)'/%3E%3C/svg%3E");
     --grain-size: 12px 12px;
 
     /* Nine-slice meander tile: four corner turns plus one repeat unit per
@@ -57,8 +65,11 @@
     --fan-up: max(calc(var(--card-h) * 0.2), calc(var(--corner-gap) + var(--corner-line)));
     --fan-down: calc(var(--card-h) * 0.09);
 
-    --meander-w: clamp(3px, calc(var(--card-w) * 0.09), 8px);
-    --meander-inset: clamp(4px, calc(var(--card-w) * 0.1), 10px);
+    /* Band plus inset must clear --fan-down (0.1278 * card-w) at its own
+       worst case (ink at the band's outer edge) or a fanned-down back
+       shows no gold at all, or a sliver too thin to read as one. */
+    --meander-w: clamp(2px, calc(var(--card-w) * 0.065), 7px);
+    --meander-inset: clamp(1px, calc(var(--card-w) * 0.025), 3px);
 
     font-family: "Palatino Linotype", "Book Antiqua", Palatino, Garamond, serif;
 }
