@@ -274,6 +274,17 @@ impl App {
         format!("Placed card on foundation {}.", pile + 1)
     }
 
+    /// Words a rejected move onto `pile`: only an empty column needs a King,
+    /// every other rejection is an illegal move. Shared by the click and
+    /// drag paths so they cannot reword the same rejection differently.
+    fn tableau_rejection_status(&self, pile: usize) -> String {
+        if self.game.tableau[pile].is_empty() {
+            EMPTY_TABLEAU_NEEDS_KING.to_string()
+        } else {
+            ILLEGAL_TABLEAU_MOVE.to_string()
+        }
+    }
+
     /// Clears `just_dragged` on the next macrotask. Yew drains every message
     /// queued within one JS task — including a trailing click and, when one
     /// follows, its paired dblclick — before this timer's task can run, so
@@ -377,15 +388,10 @@ impl App {
                         moved: true,
                         status: Self::tableau_move_status(pile),
                     }
-                } else if self.game.tableau[pile].is_empty() {
-                    DropOutcome {
-                        moved: false,
-                        status: EMPTY_TABLEAU_NEEDS_KING.to_string(),
-                    }
                 } else {
                     DropOutcome {
                         moved: false,
-                        status: ILLEGAL_TABLEAU_MOVE.to_string(),
+                        status: self.tableau_rejection_status(pile),
                     }
                 }
             }
@@ -406,6 +412,25 @@ impl App {
                 moved: false,
                 status: ILLEGAL_TABLEAU_MOVE.to_string(),
             },
+        }
+    }
+
+    /// Resolves a tap on tableau `pile`: extends the selection onto it, or
+    /// without a selection, selects its top face-up card. Words a rejected
+    /// move the same way `resolve_drop` does.
+    fn click_tableau_pile(&mut self, pile: usize) {
+        if self.game.selected.is_some() {
+            if self.game.move_selected_to_tableau(pile) {
+                self.status = Self::tableau_move_status(pile);
+            } else {
+                self.status = self.tableau_rejection_status(pile);
+            }
+        } else if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
+            && self.game.tableau[pile][top_index].face_up
+            && self.game.select_tableau(pile, top_index)
+            && let Some(card) = self.game.selected_card()
+        {
+            self.status = format!("Selected top card {}.", Self::describe_card(card));
         }
     }
 
@@ -858,19 +883,7 @@ impl Component for App {
                 if self.just_dragged {
                     return false;
                 }
-                if self.game.selected.is_some() {
-                    if self.game.move_selected_to_tableau(pile) {
-                        self.status = Self::tableau_move_status(pile);
-                    } else {
-                        self.status = EMPTY_TABLEAU_NEEDS_KING.to_string();
-                    }
-                } else if let Some(top_index) = self.game.tableau[pile].len().checked_sub(1)
-                    && self.game.tableau[pile][top_index].face_up
-                    && self.game.select_tableau(pile, top_index)
-                    && let Some(card) = self.game.selected_card()
-                {
-                    self.status = format!("Selected top card {}.", Self::describe_card(card));
-                }
+                self.click_tableau_pile(pile);
             }
             Msg::AutoFoundation => {
                 if self.game.auto_promote_lowest() {
@@ -1516,6 +1529,34 @@ mod tests {
 
         assert!(!outcome.moved);
         assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
+    }
+
+    #[test]
+    fn click_tableau_pile_rejects_a_mismatched_tableau_stack() {
+        let mut game = GameState::empty();
+        game.tableau[0].push(card(9, true));
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        app.click_tableau_pile(0);
+
+        assert_eq!(app.status, ILLEGAL_TABLEAU_MOVE);
+        assert_eq!(app.game.tableau[0].len(), 1);
+        assert_eq!(app.game.waste.len(), 1);
+    }
+
+    #[test]
+    fn click_tableau_pile_onto_empty_column_requires_a_king() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        app.click_tableau_pile(3);
+
+        assert_eq!(app.status, EMPTY_TABLEAU_NEEDS_KING);
+        assert_eq!(app.game.waste.len(), 1);
     }
 
     #[test]
