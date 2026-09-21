@@ -147,7 +147,7 @@ export class SolitareStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'DistributionId', {
       value: this.distribution.distributionId,
-      description: 'Set this as CLOUDFRONT_DISTRIBUTION_ID in the solitare repository secrets.',
+      description: 'Read by the tag deploy from cdk-outputs.json to invalidate the distribution.',
     });
 
     new cdk.CfnOutput(this, 'DistributionArn', {
