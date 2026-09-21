@@ -654,9 +654,18 @@ body::before {
 }
 
 /* A card on a flight or lifted by a drag: opacity, not visibility or
-   display, so it stays hit-testable and clickable mid-flight (§1). */
-.card.away {
+   display, so it stays hit-testable and clickable mid-flight. `transform:
+   none` (three classes, to outrank `.card:hover`/`.card.selected` regardless
+   of source order) strips the hover/selected lift, so a flight measuring
+   this card's slot reads its flat resting position, not one 2px off from
+   that lift. `transition: none` makes that stripping instant: `.card`'s own
+   transform transition would otherwise ease from the lift toward `none`,
+   and a measurement taken a frame after the class changes would still
+   catch it mid-ease — invisible either way, since this card is hidden. */
+.card.face.away {
     opacity: 0;
+    transform: none;
+    transition: none;
 }
 
 .card.red {
