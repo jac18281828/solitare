@@ -1544,6 +1544,7 @@ mod tests {
         assert_eq!(app.status, ILLEGAL_TABLEAU_MOVE);
         assert_eq!(app.game.tableau[0].len(), 1);
         assert_eq!(app.game.waste.len(), 1);
+        assert_eq!(app.game.selected, Some(Selection::Waste));
     }
 
     #[test]
