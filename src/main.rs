@@ -1,11 +1,14 @@
+mod motion;
+
 use gloo_events::EventListener;
 use gloo_timers::callback::Timeout;
 use log::info;
+use motion::{Flight, FlightKind, Rect};
 use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selection, TableauCard};
 use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::{MouseEvent, PointerEvent};
-use yew::{Component, Context, Html, Renderer, classes, html};
+use yew::{Classes, Component, Context, Html, Renderer, classes, html};
 
 const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
 
@@ -68,7 +71,7 @@ fn fan_offsets(pile: &[TableauCard]) -> TableauFan {
 
 /// A point in CSS pixels from a pointer event's `clientX`/`clientY`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct PointerPoint {
+pub struct PointerPoint {
     x: f64,
     y: f64,
 }
@@ -119,7 +122,10 @@ struct DropOutcome {
 /// One pointer's press-to-release gesture on a card or run. `origin` is the
 /// selection the gesture would pick up; `selection_before` is whatever was
 /// selected before the gesture started, restored on cancel or an illegal
-/// drop so a failed gesture leaves no trace.
+/// drop so a failed gesture leaves no trace. `grab_offset` is the press
+/// point's offset from the pressed card's own top-left corner, so the
+/// overlay can keep that exact point under the pointer instead of
+/// centering the card on it.
 #[derive(Clone, Debug, PartialEq)]
 struct DragTracker {
     pointer_id: i32,
@@ -127,6 +133,7 @@ struct DragTracker {
     selection_before: Option<Selection>,
     start: PointerPoint,
     current: PointerPoint,
+    grab_offset: PointerPoint,
     phase: DragPhase,
 }
 
@@ -136,6 +143,7 @@ impl DragTracker {
         origin: Selection,
         selection_before: Option<Selection>,
         at: PointerPoint,
+        grab_offset: PointerPoint,
     ) -> Self {
         Self {
             pointer_id,
@@ -143,6 +151,7 @@ impl DragTracker {
             selection_before,
             start: at,
             current: at,
+            grab_offset,
             phase: DragPhase::Pressed,
         }
     }
@@ -154,6 +163,7 @@ impl DragTracker {
             selection_before: self.selection_before,
             start: self.start,
             current: at,
+            grab_offset: self.grab_offset,
             phase: advance_drag_phase(self.phase, self.start, at),
         }
     }
@@ -188,6 +198,36 @@ fn release_pointer(event: &PointerEvent) {
     {
         let _ = target.release_pointer_capture(event.pointer_id());
     }
+}
+
+/// The OS motion preference, read fresh at every launch so a change takes
+/// effect without a reload rather than only at the next page load.
+fn prefers_reduced_motion() -> bool {
+    web_sys::window()
+        .and_then(|window| {
+            window
+                .match_media("(prefers-reduced-motion: reduce)")
+                .ok()
+                .flatten()
+        })
+        .is_some_and(|query| query.matches())
+}
+
+/// An element's current on-screen box, read live from the DOM — reflects a
+/// card's true position even mid-transition, since `getBoundingClientRect`
+/// always reports the browser's current computed geometry.
+fn element_rect(selector: &str) -> Option<Rect> {
+    let element = web_sys::window()?
+        .document()?
+        .query_selector(selector)
+        .ok()??;
+    let rect = element.get_bounding_client_rect();
+    Some(Rect {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,6 +271,9 @@ pub struct App {
     just_dragged: bool,
     /// The drop destination currently under the pointer, for highlighting.
     hover_target: Option<DropTarget>,
+    /// Every card currently travelling from where it was last drawn to
+    /// where it lands, or settling back from a rejected drop.
+    flights: Vec<Flight>,
 }
 
 pub enum Msg {
@@ -250,11 +293,18 @@ pub enum Msg {
     SwitchDrawMode,
     ToggleHelp,
     DismissVictoryRain,
-    PointerDown(Selection, i32, f64, f64),
+    PointerDown(Selection, i32, PointerPoint, PointerPoint),
     PointerMove(i32, f64, f64),
     PointerUp(i32, f64, f64),
     PointerCancel(i32),
     ClearJustDragged,
+    /// A flight's destination, measured once its board copy has rendered.
+    /// `f64` is the flight's `launched_at`, guarding against a flight that
+    /// was replaced between the measurement and this message's delivery.
+    FlightDestinationsMeasured(Vec<(Card, f64, Rect)>),
+    /// A flight's fallback landing: fires unconditionally at its deadline
+    /// so a hidden card always reappears, even without an animation event.
+    ExpireFlight(Card, f64),
 }
 
 impl App {
@@ -326,12 +376,29 @@ impl App {
         let link = ctx.link();
         let down = link.callback(move |event: PointerEvent| {
             capture_pointer(&event);
-            Msg::PointerDown(
-                origin,
-                event.pointer_id(),
-                event.client_x() as f64,
-                event.client_y() as f64,
-            )
+            let at = PointerPoint {
+                x: event.client_x() as f64,
+                y: event.client_y() as f64,
+            };
+            // The one measurement PointerDown may take: the pressed card's
+            // own rect, so the overlay can keep this exact point under the
+            // pointer instead of centering the card on it. `target()`, not
+            // `current_target()` — Yew delegates events to a shared root,
+            // so `current_target` is that root, not the button; `target()`
+            // may land on an inner span, so `closest` walks up to the card.
+            let grab_offset = event
+                .target()
+                .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                .and_then(|element| element.closest(".card").ok().flatten())
+                .map(|card| {
+                    let rect = card.get_bounding_client_rect();
+                    PointerPoint {
+                        x: at.x - rect.x(),
+                        y: at.y - rect.y(),
+                    }
+                })
+                .unwrap_or(PointerPoint { x: 0.0, y: 0.0 });
+            Msg::PointerDown(origin, event.pointer_id(), at, grab_offset)
         });
         let move_ = link.callback(|event: PointerEvent| {
             Msg::PointerMove(
@@ -418,9 +485,9 @@ impl App {
     /// Resolves a tap on tableau `pile`: extends the selection onto it, or
     /// without a selection, selects its top face-up card. Words a rejected
     /// move the same way `resolve_drop` does.
-    fn click_tableau_pile(&mut self, pile: usize) {
+    fn click_tableau_pile(&mut self, ctx: Option<&Context<Self>>, pile: usize) {
         if self.game.selected.is_some() {
-            if self.game.move_selected_to_tableau(pile) {
+            if self.apply_move_with_flight(ctx, |game| game.move_selected_to_tableau(pile)) {
                 self.status = Self::tableau_move_status(pile);
             } else {
                 self.status = self.tableau_rejection_status(pile);
@@ -457,68 +524,164 @@ impl App {
         }
     }
 
-    /// The dragged run's ghost, a single layer outside `.tableau-scroll` that
-    /// follows the pointer by `transform` alone so the clipped, scrollable
-    /// column never has to reflow mid-drag.
-    fn view_drag_overlay(&self) -> Html {
-        let Some(tracker) = self
-            .drag
+    fn is_flying(&self, card: Card) -> bool {
+        self.flights.iter().any(|flight| flight.card == card)
+    }
+
+    /// The cards currently lifted off their pile by an active drag past the
+    /// tap threshold — hidden at their origin so the overlay is their only
+    /// visible copy. Empty for a press that never crossed the threshold, so
+    /// a tap never blinks.
+    fn lifted_cards(&self) -> Vec<Card> {
+        self.drag
             .as_ref()
             .filter(|tracker| tracker.phase == DragPhase::Dragging)
-        else {
-            return Html::default();
-        };
+            .map(|tracker| self.dragged_cards(tracker.origin))
+            .unwrap_or_default()
+    }
 
-        let cards = self.dragged_cards(tracker.origin);
-        let overlay_style = format!(
-            "transform: translate({}px, {}px) translate(-50%, -50%);",
-            tracker.current.x, tracker.current.y
-        );
+    /// Whether a face-up card should paint hidden: away on a flight, or
+    /// lifted off its pile mid-drag.
+    fn is_away(&self, card: Card, lifted: &[Card]) -> bool {
+        self.is_flying(card) || lifted.contains(&card)
+    }
 
-        html! {
-            <div class="drag-overlay" style={overlay_style} aria-hidden="true">
-                { for cards.iter().enumerate().map(|(index, card)| {
-                    let mut card_classes = classes!("card", "face", "drag-overlay-card");
-                    card_classes.push(if card.is_red() { "red" } else { "black" });
-                    html! {
-                        <div class={card_classes} style={format!("--fan-index: {index};")}>
-                            <span class="corner top">
-                                <span class="rank">{ card.rank_label() }</span>
-                                <span class="suit">{ card.suit.symbol() }</span>
-                            </span>
-                        </div>
+    fn rect_for_stock_slot() -> Option<Rect> {
+        element_rect("[data-pile-slot='stock']")
+    }
+
+    /// Every currently visible face-up card's departure rect, read from the
+    /// DOM before `mutate` changes `GameState`: a card already mid-flight
+    /// departs from its live flight-layer position, not its stale slot.
+    fn capture_departure_rects(&self, before: &motion::Snapshot) -> Vec<(Card, Rect)> {
+        before
+            .iter()
+            .filter_map(|(card, _)| {
+                let key = motion::card_key(*card);
+                let board = element_rect(&format!("[data-card-id='{key}']"));
+                let in_flight = self
+                    .is_flying(*card)
+                    .then(|| element_rect(&format!("[data-flight-card='{key}']")))
+                    .flatten();
+                match (board, in_flight) {
+                    (Some(board), in_flight) => {
+                        Some((*card, motion::departure_rect(board, in_flight)))
                     }
-                }) }
-            </div>
+                    (None, Some(in_flight)) => Some((*card, in_flight)),
+                    (None, None) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// A dragged card's departure rect at release: wherever the overlay
+    /// last drew it, read from the DOM before the overlay is torn down.
+    fn capture_overlay_departure_rects(&self, dragged: &[Card]) -> Vec<(Card, Rect)> {
+        dragged
+            .iter()
+            .filter_map(|card| {
+                let selector = format!("[data-overlay-card='{}']", motion::card_key(*card));
+                element_rect(&selector).map(|rect| (*card, rect))
+            })
+            .collect()
+    }
+
+    /// Applies one GameState-mutating move and, on success, plans and
+    /// launches flights for every card its snapshot diff calls moved.
+    /// Wraps `move_selected_to_tableau`/`_foundation` and
+    /// `auto_promote_lowest` identically, so every click, double-click and
+    /// auto-promotion path gains motion from one call.
+    /// `ctx` is `None` only from a hermetic unit test, where no real Yew
+    /// scope exists to schedule a flight's expiry timer against; the move
+    /// itself still applies, just without ever entering `self.flights`.
+    fn apply_move_with_flight<F>(&mut self, ctx: Option<&Context<Self>>, mutate: F) -> bool
+    where
+        F: FnOnce(&mut GameState) -> bool,
+    {
+        // No Yew scope: a hermetic unit test. Skip every DOM touch (even
+        // `prefers_reduced_motion`'s `window()`) and just apply the move,
+        // matching plain `move_selected_to_*` from before flights existed.
+        let Some(ctx) = ctx else {
+            return mutate(&mut self.game);
+        };
+        let reduced_motion = prefers_reduced_motion();
+        let before = motion::snapshot(&self.game);
+        let departures = if reduced_motion {
+            Vec::new()
+        } else {
+            self.capture_departure_rects(&before)
+        };
+        let moved = mutate(&mut self.game);
+        if moved {
+            let after = motion::snapshot(&self.game);
+            let launched_at = js_sys::Date::now();
+            let flights = motion::plan_flights_for_move(
+                &before,
+                &after,
+                &departures,
+                FlightKind::Travel,
+                reduced_motion,
+                launched_at,
+            );
+            self.launch_flights(ctx, flights);
+        }
+        moved
+    }
+
+    /// Appends each flight and arms its deadline: a flight always lands,
+    /// even when its `transitionend` never fires (an element removed, a
+    /// tab hidden, reduced motion switched on mid-flight).
+    fn launch_flights(&mut self, ctx: &Context<Self>, flights: Vec<Flight>) {
+        for flight in flights {
+            let card = flight.card;
+            let launched_at = flight.launched_at;
+            // A card moved again mid-flight supersedes its own earlier
+            // flight rather than flying twice at once; the old timer still
+            // fires later, but by then this card's launched_at has moved
+            // on, so `ExpireFlight` finds nothing to remove.
+            self.flights.retain(|existing| existing.card != card);
+            let link = ctx.link().clone();
+            Timeout::new(flight.kind.deadline_ms() as u32, move || {
+                link.send_message(Msg::ExpireFlight(card, launched_at));
+            })
+            .forget();
+            self.flights.push(flight);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn view_face_card(
-        &self,
-        card: Card,
-        selected: bool,
-        zeus_revealed: bool,
-        on_click: yew::Callback<MouseEvent>,
-        on_double_click: yew::Callback<MouseEvent>,
-        pointer: PointerCallbacks,
-        drop_foundation: Option<usize>,
-        drop_target: bool,
-    ) -> Html {
-        let mut card_classes = classes!("card", "face");
-        card_classes.push(if card.is_red() { "red" } else { "black" });
-        if selected {
-            card_classes.push("selected");
+    /// Measures the destination of every flight still awaiting one. Called
+    /// from `rendered()`, after the move's own render has already painted
+    /// the card hidden at its new home — that board copy's rect, though
+    /// invisible, is now the correct landing point.
+    fn measure_flight_destinations(&self, ctx: &Context<Self>) {
+        let measured: Vec<(Card, f64, Rect)> = self
+            .flights
+            .iter()
+            .filter(|flight| flight.to.is_none())
+            .filter_map(|flight| {
+                let selector = format!("[data-card-id='{}']", motion::card_key(flight.card));
+                element_rect(&selector).map(|rect| (flight.card, flight.launched_at, rect))
+            })
+            .collect();
+        if !measured.is_empty() {
+            ctx.link()
+                .send_message(Msg::FlightDestinationsMeasured(measured));
         }
+    }
+
+    /// The red/black and court-card classes every face rendering shares.
+    fn card_palette_classes(card: Card) -> Classes {
+        let mut classes = classes!(if card.is_red() { "red" } else { "black" });
         if matches!(card.rank, 1 | 11 | 12 | 13) {
-            card_classes.push("court");
+            classes.push("court");
         }
-        if zeus_revealed {
-            card_classes.push("zeus-revealed");
-        }
-        if drop_target {
-            card_classes.push("drop-target");
-        }
+        classes
+    }
+
+    /// The face markup a board card, the drag overlay and the flight layer
+    /// all share, so a card's face never changes at pick-up, release or
+    /// landing.
+    fn card_face_content(card: Card) -> Html {
         let center_art = if matches!(card.rank, 11..=13) {
             "art-dionysus"
         } else if card.rank == 1 {
@@ -526,21 +689,8 @@ impl App {
         } else {
             "art-laurel"
         };
-
         html! {
-            <button
-                type="button"
-                class={card_classes}
-                onclick={on_click}
-                ondblclick={on_double_click}
-                onpointerdown={pointer.down}
-                onpointermove={pointer.move_}
-                onpointerup={pointer.up}
-                onpointercancel={pointer.cancel}
-                aria-label={format!("{} of {}", card.rank_label(), card.suit.latin_name())}
-                disabled={self.interactions_locked()}
-                data-drop-foundation={drop_foundation.map(|pile| pile.to_string())}
-            >
+            <>
                 <span class="corner top">
                     <span class="rank">{ card.rank_label() }</span>
                     <span class="suit">{ card.suit.symbol() }</span>
@@ -554,15 +704,165 @@ impl App {
                     <span class="rank">{ card.rank_label() }</span>
                     <span class="suit">{ card.suit.symbol() }</span>
                 </span>
+            </>
+        }
+    }
+
+    /// A pile whose visible top is away shows what lies beneath it instead
+    /// of going blank: waste and foundation render only their top card, so
+    /// hiding it without an underlay would leave the slot empty for the
+    /// flight's whole length.
+    fn view_pile_underlay(pile: &[Card], flights: &[Flight], empty_label: (&str, &str)) -> Html {
+        let beneath = &pile[..pile.len().saturating_sub(1)];
+        match motion::underlay_card(beneath, flights) {
+            Some(card) => {
+                let mut classes = classes!("card", "face", "pile-underlay");
+                classes.extend(Self::card_palette_classes(card));
+                html! {
+                    <div class={classes} aria-hidden="true">
+                        { Self::card_face_content(card) }
+                    </div>
+                }
+            }
+            None => html! {
+                <div class="pile-empty pile-underlay" aria-hidden="true">
+                    <span>{ empty_label.0 }</span>
+                    <span class="tiny">{ empty_label.1 }</span>
+                </div>
+            },
+        }
+    }
+
+    /// Every card in flight, each its own fixed-position layer so it can
+    /// travel to its own measured destination independently — a run flies
+    /// as a run, but each card keeps its own fan slot.
+    fn view_flight_layer(&self) -> Html {
+        self.flights
+            .iter()
+            .map(|flight| {
+                let rect = flight.to.unwrap_or(flight.from);
+                let mut classes = classes!("card", "face", "flight-card");
+                classes.extend(Self::card_palette_classes(flight.card));
+                if flight.kind == FlightKind::SettleBack {
+                    classes.push("settle-back");
+                }
+                let style = format!("transform: translate({}px, {}px);", rect.x, rect.y);
+                let card_id = motion::card_key(flight.card);
+                html! {
+                    <div
+                        key={format!("flight-{card_id}")}
+                        class={classes}
+                        style={style}
+                        aria-hidden="true"
+                        data-flight-card={card_id}
+                    >
+                        { Self::card_face_content(flight.card) }
+                    </div>
+                }
+            })
+            .collect::<Html>()
+    }
+
+    /// The dragged run's ghost, a single layer outside `.tableau-scroll` that
+    /// follows the pointer by `transform` alone so the clipped, scrollable
+    /// column never has to reflow mid-drag.
+    fn view_drag_overlay(&self) -> Html {
+        let Some(tracker) = self
+            .drag
+            .as_ref()
+            .filter(|tracker| tracker.phase == DragPhase::Dragging)
+        else {
+            return Html::default();
+        };
+
+        let cards = self.dragged_cards(tracker.origin);
+        // Keeps the grab point under the pointer rather than centering the
+        // card on it — hiding the origin (below) would expose that jump.
+        let overlay_style = format!(
+            "transform: translate({}px, {}px);",
+            tracker.current.x - tracker.grab_offset.x,
+            tracker.current.y - tracker.grab_offset.y,
+        );
+
+        html! {
+            <div class="drag-overlay" style={overlay_style} aria-hidden="true">
+                { for cards.iter().enumerate().map(|(index, card)| {
+                    let mut card_classes = classes!("card", "face", "drag-overlay-card");
+                    card_classes.extend(Self::card_palette_classes(*card));
+                    html! {
+                        <div
+                            key={motion::card_key(*card)}
+                            class={card_classes}
+                            style={format!("--fan-index: {index};")}
+                            data-overlay-card={motion::card_key(*card)}
+                        >
+                            { Self::card_face_content(*card) }
+                        </div>
+                    }
+                }) }
+            </div>
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn view_face_card(
+        &self,
+        card: Card,
+        selected: bool,
+        zeus_revealed: bool,
+        away: bool,
+        on_click: yew::Callback<MouseEvent>,
+        on_double_click: yew::Callback<MouseEvent>,
+        pointer: PointerCallbacks,
+        drop_foundation: Option<usize>,
+        drop_target: bool,
+    ) -> Html {
+        let mut card_classes = classes!("card", "face");
+        card_classes.extend(Self::card_palette_classes(card));
+        if selected {
+            card_classes.push("selected");
+        }
+        if zeus_revealed {
+            card_classes.push("zeus-revealed");
+        }
+        if drop_target {
+            card_classes.push("drop-target");
+        }
+        if away {
+            // Opacity, not visibility/display: a card mid-flight or lifted
+            // by a drag must stay hit-testable and clickable (§1).
+            card_classes.push("away");
+        }
+        let card_id = motion::card_key(card);
+
+        html! {
+            <button
+                type="button"
+                key={card_id.clone()}
+                class={card_classes}
+                onclick={on_click}
+                ondblclick={on_double_click}
+                onpointerdown={pointer.down}
+                onpointermove={pointer.move_}
+                onpointerup={pointer.up}
+                onpointercancel={pointer.cancel}
+                aria-label={format!("{} of {}", card.rank_label(), card.suit.latin_name())}
+                disabled={self.interactions_locked()}
+                data-drop-foundation={drop_foundation.map(|pile| pile.to_string())}
+                data-card-id={card_id}
+            >
+                { Self::card_face_content(card) }
             </button>
         }
     }
 
     fn view_back_card(
         &self,
+        card: Card,
         selected: bool,
         label: &'static str,
         on_click: yew::Callback<MouseEvent>,
+        pile_slot: Option<&'static str>,
     ) -> Html {
         let mut card_classes = classes!("card", "back");
         if selected {
@@ -572,34 +872,49 @@ impl App {
         html! {
             <button
                 type="button"
+                key={motion::card_key(card)}
                 class={card_classes}
                 onclick={on_click}
                 aria-label={label}
                 disabled={self.interactions_locked()}
+                data-pile-slot={pile_slot}
             >
                 <span class="back-medallion" aria-hidden="true"></span>
             </button>
         }
     }
 
-    fn view_foundation_slot(&self, ctx: &Context<Self>, pile: usize) -> Html {
+    fn view_foundation_slot(&self, ctx: &Context<Self>, pile: usize, lifted: &[Card]) -> Html {
         let on_click = ctx.link().callback(move |_| Msg::ClickFoundation(pile));
         let selected = self.game.is_selected(Selection::Foundation { pile });
         let drop_target = self.hover_target == Some(DropTarget::Foundation(pile));
+        let foundation = &self.game.foundations[pile];
+        let top_away = foundation
+            .last()
+            .is_some_and(|card| self.is_away(*card, lifted));
+        let underlay = top_away
+            .then(|| Self::view_pile_underlay(foundation, &self.flights, ("TEMPLE", "ACE UP")));
 
-        if let Some(card) = self.game.foundations[pile].last().copied() {
+        if let Some(card) = foundation.last().copied() {
             let on_double_click = ctx.link().callback(|_| Msg::Noop);
             let pointer = Self::pointer_callbacks(ctx, Selection::Foundation { pile });
-            self.view_face_card(
+            let face = self.view_face_card(
                 card,
                 selected,
                 false,
+                top_away,
                 on_click,
                 on_double_click,
                 pointer,
                 Some(pile),
                 drop_target,
-            )
+            );
+            html! {
+                <div class="card-frame">
+                    { for underlay }
+                    { face }
+                </div>
+            }
         } else {
             html! {
                 <button
@@ -642,10 +957,21 @@ impl Component for App {
             drag: None,
             just_dragged: false,
             hover_target: None,
+            flights: Vec::new(),
         }
     }
 
     fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        // A flight always lands: this sweep is a second guarantee beside
+        // each flight's own `ExpireFlight` timeout, catching a flight that
+        // for any reason outlived its deadline before that timer fired.
+        let now = js_sys::Date::now();
+        self.flights.retain(|flight| !flight.has_expired(now));
+
+        // Every render, not just the first: a flight's destination can only
+        // be measured once its (hidden) board copy has actually painted.
+        self.measure_flight_destinations(ctx);
+
         if !first_render || self.key_listener.is_some() {
             return;
         }
@@ -695,10 +1021,17 @@ impl Component for App {
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+        // Flight bookkeeping passes the end-state gate: the winning move's
+        // own flight must still land while the victory screen shows.
         if self.end_state.is_some()
             && !matches!(
                 msg,
-                Msg::Noop | Msg::NewGame | Msg::ToggleHelp | Msg::DismissVictoryRain
+                Msg::Noop
+                    | Msg::NewGame
+                    | Msg::ToggleHelp
+                    | Msg::DismissVictoryRain
+                    | Msg::FlightDestinationsMeasured(_)
+                    | Msg::ExpireFlight(..)
             )
         {
             self.status = match self.end_state {
@@ -734,18 +1067,28 @@ impl Component for App {
                 self.victory_gold_award = 0;
                 self.victory_rain_dismissed = false;
                 self.status = "You gave up. A fresh deck has been dealt.".to_string();
+                self.flights.clear();
             }
             Msg::DrawStock => {
                 let had_stock = !self.game.stock.is_empty();
                 let had_waste = !self.game.waste.is_empty();
                 let waste_before = self.game.waste.len();
                 let gold_before = self.game.temple_gold;
+                let reduced_motion = prefers_reduced_motion();
+                // The new waste top departs from the stock slot, already
+                // face up: measure before the draw pops the stock's card.
+                let stock_rect = (had_stock && !reduced_motion)
+                    .then(Self::rect_for_stock_slot)
+                    .flatten();
                 self.game.draw_or_recycle();
                 self.status = if had_stock {
                     let drawn = self.game.waste.len().saturating_sub(waste_before);
                     let suffix = if drawn == 1 { "" } else { "s" };
                     format!("Drew {drawn} card{suffix} to the waste pile.")
                 } else if had_waste {
+                    // A recycle cancels any flight in the air; nothing new
+                    // flies here.
+                    self.flights.clear();
                     let collected = gold_before.saturating_sub(self.game.temple_gold);
                     if collected > 0 {
                         format!(
@@ -757,6 +1100,26 @@ impl Component for App {
                 } else {
                     "No cards available to draw.".to_string()
                 };
+
+                if let Some(stock_rect) = stock_rect {
+                    let drawn = self.game.waste.len().saturating_sub(waste_before);
+                    let new_top = self.game.waste.last().copied();
+                    let launched_at = js_sys::Date::now();
+                    if let Some(flight) =
+                        motion::plan_draw_flight(new_top, stock_rect, reduced_motion, launched_at)
+                    {
+                        // Draw-3's lower two cards arrive silently: only the
+                        // true top gets a flight, so the underlay must skip
+                        // them too until it lands.
+                        let covers = if drawn > 1 {
+                            let waste_len = self.game.waste.len();
+                            self.game.waste[waste_len - drawn..waste_len - 1].to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        self.launch_flights(ctx, vec![flight.with_covers(covers)]);
+                    }
+                }
 
                 if !had_stock && had_waste && self.game.temple_gold == 0 {
                     self.game.zeus_vision();
@@ -789,7 +1152,9 @@ impl Component for App {
                     self.status = "Waste pile is empty.".to_string();
                 } else {
                     let _ = self.game.select_waste();
-                    if self.game.move_selected_to_any_foundation() {
+                    if self.apply_move_with_flight(Some(ctx), |game| {
+                        game.move_selected_to_any_foundation()
+                    }) {
                         self.status = "Moved waste card to a foundation.".to_string();
                     } else {
                         self.game.clear_selection();
@@ -802,7 +1167,9 @@ impl Component for App {
                     return false;
                 }
                 if self.game.selected.is_some() {
-                    if self.game.move_selected_to_foundation(pile) {
+                    if self.apply_move_with_flight(Some(ctx), |game| {
+                        game.move_selected_to_foundation(pile)
+                    }) {
                         self.status = Self::foundation_move_status(pile);
                     } else if self.game.select_foundation(pile) {
                         if let Some(card) = self.game.selected_card() {
@@ -832,7 +1199,9 @@ impl Component for App {
                     return false;
                 }
                 if self.game.selected.is_some() {
-                    if self.game.move_selected_to_tableau(pile) {
+                    if self.apply_move_with_flight(Some(ctx), |game| {
+                        game.move_selected_to_tableau(pile)
+                    }) {
                         self.status = Self::tableau_move_status(pile);
                     } else if self.game.select_tableau(pile, index) {
                         if let Some(card) = self.game.selected_card() {
@@ -865,7 +1234,9 @@ impl Component for App {
                     return false;
                 }
                 if self.game.select_tableau(pile, index) {
-                    if self.game.move_selected_to_any_foundation() {
+                    if self.apply_move_with_flight(Some(ctx), |game| {
+                        game.move_selected_to_any_foundation()
+                    }) {
                         self.status = "Moved top tableau card to a foundation.".to_string();
                     } else {
                         self.game.clear_selection();
@@ -883,10 +1254,10 @@ impl Component for App {
                 if self.just_dragged {
                     return false;
                 }
-                self.click_tableau_pile(pile);
+                self.click_tableau_pile(Some(ctx), pile);
             }
             Msg::AutoFoundation => {
-                if self.game.auto_promote_lowest() {
+                if self.apply_move_with_flight(Some(ctx), |game| game.auto_promote_lowest()) {
                     self.status = "Moved one card to a foundation.".to_string();
                 } else {
                     self.status = "No automatic foundation move available.".to_string();
@@ -898,7 +1269,7 @@ impl Component for App {
                 }
 
                 self.game.clear_selection();
-                if self.game.auto_promote_lowest() {
+                if self.apply_move_with_flight(Some(ctx), |game| game.auto_promote_lowest()) {
                     if self.game.won {
                         self.trigger_victory();
                     } else {
@@ -916,7 +1287,7 @@ impl Component for App {
                     return false;
                 }
 
-                if self.game.auto_promote_lowest() {
+                if self.apply_move_with_flight(Some(ctx), |game| game.auto_promote_lowest()) {
                     if self.game.won {
                         self.trigger_victory();
                     } else {
@@ -933,6 +1304,9 @@ impl Component for App {
                 self.game.temple_gold = 0;
                 self.end_state = Some(EndState::ZeusThunder);
                 self.status = "Zeus' Thunder is heard".to_string();
+                // Nothing flies on Zeus' Vision; the reveal re-fans the
+                // whole board, so any flight in the air would land wrong.
+                self.flights.clear();
             }
             Msg::SwitchDrawMode => {
                 let next = if self.game.draw_count == EASY_DRAW_COUNT {
@@ -963,7 +1337,7 @@ impl Component for App {
                     return false;
                 }
             }
-            Msg::PointerDown(origin, pointer_id, x, y) => {
+            Msg::PointerDown(origin, pointer_id, at, grab_offset) => {
                 // Defensive reset: `schedule_just_dragged_clear` already
                 // guarantees the flag from a prior drag is gone before any
                 // unrelated later gesture, but a fresh press should never
@@ -977,7 +1351,8 @@ impl Component for App {
                     pointer_id,
                     origin,
                     selection_before,
-                    PointerPoint { x, y },
+                    at,
+                    grab_offset,
                 ));
                 return false;
             }
@@ -1035,12 +1410,41 @@ impl Component for App {
                     return false;
                 }
 
+                // The overlay is still on screen at this point (this
+                // render hasn't patched the DOM yet), so its cards' rects
+                // are exactly where it last drew them.
+                let reduced_motion = prefers_reduced_motion();
+                let dragged = self.dragged_cards(tracker.origin);
+                let departures = if reduced_motion {
+                    Vec::new()
+                } else {
+                    self.capture_overlay_departure_rects(&dragged)
+                };
+
                 let target = Self::hit_test_drop_target(x, y);
                 let outcome = self.resolve_drop(target);
                 self.just_dragged = true;
                 Self::schedule_just_dragged_clear(ctx);
                 if !outcome.moved {
                     self.game.selected = tracker.selection_before;
+                }
+                if !reduced_motion {
+                    let kind = if outcome.moved {
+                        FlightKind::Travel
+                    } else {
+                        FlightKind::SettleBack
+                    };
+                    let launched_at = js_sys::Date::now();
+                    let flights: Vec<Flight> = dragged
+                        .iter()
+                        .filter_map(|card| {
+                            departures
+                                .iter()
+                                .find(|(c, _)| c == card)
+                                .map(|(_, rect)| Flight::new(*card, *rect, kind, launched_at))
+                        })
+                        .collect();
+                    self.launch_flights(ctx, flights);
                 }
                 self.status = outcome.status;
             }
@@ -1052,12 +1456,48 @@ impl Component for App {
                     self.drag = Some(tracker);
                     return false;
                 }
+                let reduced_motion = prefers_reduced_motion();
+                let dragged = self.dragged_cards(tracker.origin);
+                let departures = if reduced_motion {
+                    Vec::new()
+                } else {
+                    self.capture_overlay_departure_rects(&dragged)
+                };
                 self.game.selected = tracker.selection_before;
                 self.hover_target = None;
+                if !reduced_motion {
+                    let launched_at = js_sys::Date::now();
+                    let flights: Vec<Flight> = dragged
+                        .iter()
+                        .filter_map(|card| {
+                            departures.iter().find(|(c, _)| c == card).map(|(_, rect)| {
+                                Flight::new(*card, *rect, FlightKind::SettleBack, launched_at)
+                            })
+                        })
+                        .collect();
+                    self.launch_flights(ctx, flights);
+                }
             }
             Msg::ClearJustDragged => {
                 self.just_dragged = false;
                 return false;
+            }
+            Msg::FlightDestinationsMeasured(measurements) => {
+                for (card, launched_at, rect) in measurements {
+                    if let Some(flight) = self.flights.iter_mut().find(|flight| {
+                        flight.card == card
+                            && flight.launched_at == launched_at
+                            && flight.to.is_none()
+                    }) {
+                        flight.to = Some(rect);
+                    }
+                }
+                return true;
+            }
+            Msg::ExpireFlight(card, launched_at) => {
+                self.flights
+                    .retain(|flight| !(flight.card == card && flight.launched_at == launched_at));
+                return true;
             }
         }
 
@@ -1105,6 +1545,10 @@ impl Component for App {
             "Expand Help"
         };
 
+        // Which cards a live drag has lifted off their pile — computed once
+        // and threaded through every pile view that needs to hide one.
+        let lifted = self.lifted_cards();
+
         let stock_view = if self.game.stock.is_empty() {
             let label = if self.game.waste.is_empty() {
                 "Stock"
@@ -1112,28 +1556,48 @@ impl Component for App {
                 "Recycle waste"
             };
             html! {
-                <button type="button" class="pile-empty stock-empty" onclick={draw_stock.clone()} aria-label={label} disabled={locked}>
+                <button type="button" class="pile-empty stock-empty" onclick={draw_stock.clone()} aria-label={label} disabled={locked} data-pile-slot="stock">
                     <span>{ "REDEAL" }</span>
                     <span class="tiny">{ "STOCK" }</span>
                 </button>
             }
         } else {
-            self.view_back_card(false, "Draw from stock", draw_stock.clone())
+            // Non-empty per the branch above: the top card's identity keys
+            // this button and marks the slot flights depart from.
+            let top = self.game.stock.last().copied().expect("stock non-empty");
+            self.view_back_card(
+                top,
+                false,
+                "Draw from stock",
+                draw_stock.clone(),
+                Some("stock"),
+            )
         };
 
         let waste_view = if let Some(card) = self.game.waste.last().copied() {
             let selected = self.game.is_selected(Selection::Waste);
+            let away = self.is_away(card, &lifted);
+            let underlay = away.then(|| {
+                Self::view_pile_underlay(&self.game.waste, &self.flights, ("WASTE", "DRAW"))
+            });
             let pointer = Self::pointer_callbacks(ctx, Selection::Waste);
-            self.view_face_card(
+            let face = self.view_face_card(
                 card,
                 selected,
                 false,
+                away,
                 click_waste,
                 double_click_waste,
                 pointer,
                 None,
                 false,
-            )
+            );
+            html! {
+                <div class="card-frame">
+                    { for underlay }
+                    { face }
+                </div>
+            }
         } else {
             html! {
                 <button
@@ -1154,7 +1618,7 @@ impl Component for App {
                 html! {
                     <div class="pile-slot">
                         <div class="pile-label">{ format!("Temple {}", pile + 1) }</div>
-                        { self.view_foundation_slot(ctx, pile) }
+                        { self.view_foundation_slot(ctx, pile, &lifted) }
                     </div>
                 }
             })
@@ -1196,11 +1660,13 @@ impl Component for App {
                                 pile: pile_index,
                                 index: card_index,
                             };
+                            let away = self.is_away(tableau_card.card, &lifted);
                             let pointer = Self::pointer_callbacks(ctx, origin);
                             self.view_face_card(
                                 tableau_card.card,
                                 selected,
                                 tableau_card.zeus_revealed,
+                                away,
                                 on_click,
                                 on_double_click,
                                 pointer,
@@ -1212,14 +1678,27 @@ impl Component for App {
                                 event.stop_propagation();
                                 Msg::Noop
                             });
-                            self.view_back_card(false, "Hidden card", block_click)
+                            self.view_back_card(
+                                tableau_card.card,
+                                false,
+                                "Hidden card",
+                                block_click,
+                                None,
+                            )
                         };
 
+                        // Keyed by true card identity — a flip between
+                        // face-down and face-up, or a pile whose card count
+                        // changes, never lets Yew reuse the wrong node.
                         html! {
-                            <div class="tableau-layer" style={format!(
-                                "--down-steps: {}; --up-steps: {};",
-                                steps.down, steps.up,
-                            )}> { card_html } </div>
+                            <div
+                                key={motion::card_key(tableau_card.card)}
+                                class="tableau-layer"
+                                style={format!(
+                                    "--down-steps: {}; --up-steps: {};",
+                                    steps.down, steps.up,
+                                )}
+                            > { card_html } </div>
                         }
                     })
                     .collect::<Html>();
@@ -1346,6 +1825,7 @@ impl Component for App {
                     <span>{ "Keys: D or Enter draws, Space sends one to temple, A sends all." }</span>
                 </section>
                 <span class="version-tag" aria-hidden="true">{ concat!("v", env!("CARGO_PKG_VERSION")) }</span>
+                { self.view_flight_layer() }
                 { self.view_drag_overlay() }
             </main>
         }
@@ -1501,6 +1981,7 @@ mod tests {
             drag: None,
             just_dragged: false,
             hover_target: None,
+            flights: Vec::new(),
         }
     }
 
@@ -1539,7 +2020,7 @@ mod tests {
         game.selected = Some(Selection::Waste);
         let mut app = app_with(game);
 
-        app.click_tableau_pile(0);
+        app.click_tableau_pile(None, 0);
 
         assert_eq!(app.status, ILLEGAL_TABLEAU_MOVE);
         assert_eq!(app.game.tableau[0].len(), 1);
@@ -1554,7 +2035,7 @@ mod tests {
         game.selected = Some(Selection::Waste);
         let mut app = app_with(game);
 
-        app.click_tableau_pile(3);
+        app.click_tableau_pile(None, 3);
 
         assert_eq!(app.status, EMPTY_TABLEAU_NEEDS_KING);
         assert_eq!(app.game.waste.len(), 1);

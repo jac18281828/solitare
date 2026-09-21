@@ -8,6 +8,8 @@ Ancient Greek and Roman themed Klondike solitaire built with Rust + Yew + WebAss
 - Click-to-select and click-to-move interactions, or drag a card or run
   straight to its destination on touch and mouse
 - Double-click waste or top tableau card to auto-send to foundation
+- Cards fly to where they land, with a soft settle-back on a rejected
+  drop; honours `prefers-reduced-motion` throughout
 - Foundation and tableau legality checks
 - Auto-flip hidden tableau cards after moves
 - Win detection when all four foundations reach King

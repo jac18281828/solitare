@@ -313,7 +313,9 @@ body::before {
     opacity: 0;
     transform: translate(-50%, -50%) translateY(18px) scale(0.92);
     pointer-events: none;
-    z-index: 2;
+    /* Above the flight layer (z-index: 2): the victory art always wins the
+       stack once the game has ended. */
+    z-index: 3;
 }
 
 .victory-ended .victory-temple {
@@ -338,7 +340,7 @@ body::before {
     inset: 0;
     overflow: hidden;
     pointer-events: none;
-    z-index: 2;
+    z-index: 3;
 }
 
 .victory-coin {
@@ -566,6 +568,24 @@ body::before {
     width: var(--card-w);
 }
 
+/* Wraps a waste/foundation card with its underlay: the underlay sits
+   absolutely beneath the real button, which stays in flow above it. */
+.card-frame {
+    position: relative;
+}
+
+/* Two classes each, to outrank `.card, .pile-empty { position: relative }`
+   below regardless of source order: an underlay that stayed in flow would
+   push the real button down by its own height instead of sitting beneath
+   it. */
+.card.pile-underlay,
+.pile-empty.pile-underlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+}
+
 .pile-label {
     font-size: 0.74rem;
     text-transform: uppercase;
@@ -631,6 +651,12 @@ body::before {
 .pile-empty.selected {
     filter: brightness(1.07);
     box-shadow: 0 11px 16px rgba(0, 0, 0, 0.28);
+}
+
+/* A card on a flight or lifted by a drag: opacity, not visibility or
+   display, so it stays hit-testable and clickable mid-flight (§1). */
+.card.away {
+    opacity: 0;
 }
 
 .card.red {
@@ -917,6 +943,25 @@ body::before {
     box-shadow: 0 16px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* Beside .drag-overlay: paints above every section and below the victory
+   art (z-index: 3), never inside .tableau-scroll's clip. Each card is its
+   own fixed layer with its own measured destination, so a run's cards fly
+   to their own fanned slots rather than one shared point. */
+.flight-card {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    pointer-events: none;
+    transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+    will-change: transform;
+    box-shadow: 0 16px 24px rgba(0, 0, 0, 0.4);
+}
+
+.flight-card.settle-back {
+    transition-duration: 280ms;
+}
+
 .help-strip {
     margin-top: 12px;
     border-radius: 12px;
@@ -955,6 +1000,31 @@ body::before {
     color: rgba(255, 255, 255, 0.55);
     text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
     font-variant-numeric: tabular-nums;
+}
+
+/* No flight ever launches under this preference (main.rs gates it before
+   creating one), so only the board's own transitions and animations need
+   quieting here: cards land at once, the hover/selection lift snaps
+   instead of easing, and the victory motion stops outright. */
+@media (prefers-reduced-motion: reduce) {
+    .card {
+        transition: box-shadow 0.12s ease;
+    }
+
+    .help-strip {
+        transition: none;
+    }
+
+    .victory-coins {
+        display: none;
+    }
+
+    /* Matches `.victory-ended .victory-temple`'s specificity: a bare
+       `.victory-temple` here would lose to that two-class rule regardless
+       of media query or source order. */
+    .victory-ended .victory-temple {
+        animation: none;
+    }
 }
 
 @media (max-width: 900px) {
