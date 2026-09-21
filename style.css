@@ -962,9 +962,13 @@ body::before {
     left: 0;
     z-index: 2;
     pointer-events: none;
-    transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+    /* box-shadow is inline, not here: it eases from the lifted look to the
+       board card's own resting shadow over the same duration as transform,
+       so landing changes nothing visible. */
+    transition:
+        transform 220ms cubic-bezier(0.2, 0, 0, 1),
+        box-shadow 220ms cubic-bezier(0.2, 0, 0, 1);
     will-change: transform;
-    box-shadow: 0 16px 24px rgba(0, 0, 0, 0.4);
 }
 
 .flight-card.settle-back {

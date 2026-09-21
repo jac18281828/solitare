@@ -81,6 +81,16 @@ impl Flight {
     }
 }
 
+/// Re-aims a flight already under way: continues it from its current
+/// on-screen point toward a newly measured destination, restarting its
+/// clock from this moment so its deadline counts from the re-aim rather
+/// than the flight's original launch.
+pub fn reaim(flight: &mut Flight, live: Rect, destination: Rect, now: f64) {
+    flight.from = live;
+    flight.to = Some(destination);
+    flight.launched_at = now;
+}
+
 /// A card's departure point: its live in-flight position when one exists,
 /// otherwise its board (or drag-overlay) position. A card moved again
 /// mid-flight continues from where it is rather than snapping back to a
@@ -167,6 +177,27 @@ pub fn plan_flights_for_move(
                 .iter()
                 .find(|(c, _)| *c == card)
                 .map(|(_, rect)| Flight::new(card, *rect, kind, launched_at))
+        })
+        .collect()
+}
+
+/// The flights a drag's release plans: every dragged card whose departure
+/// was captured flies from there — `Travel` on a landed drop, `SettleBack`
+/// on a rejected one or a cancel. A card missing from `departures` (its
+/// rect could not be measured) simply gets no flight.
+pub fn plan_drag_flights(
+    dragged: &[Card],
+    departures: &[(Card, Rect)],
+    kind: FlightKind,
+    launched_at: f64,
+) -> Vec<Flight> {
+    dragged
+        .iter()
+        .filter_map(|card| {
+            departures
+                .iter()
+                .find(|(c, _)| c == card)
+                .map(|(_, rect)| Flight::new(*card, *rect, kind, launched_at))
         })
         .collect()
 }
@@ -294,6 +325,19 @@ mod tests {
     }
 
     #[test]
+    fn reaiming_a_flight_resets_its_clock_to_the_reaim_moment() {
+        let mut flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 100.0);
+        flight.to = Some(rect(50.0, 50.0));
+
+        reaim(&mut flight, rect(20.0, 20.0), rect(90.0, 90.0), 500.0);
+
+        assert_eq!(flight.from, rect(20.0, 20.0));
+        assert_eq!(flight.to, Some(rect(90.0, 90.0)));
+        assert_eq!(flight.launched_at, 500.0);
+        assert_eq!(flight.deadline(), 500.0 + FlightKind::Travel.deadline_ms());
+    }
+
+    #[test]
     fn a_relocated_card_flies_and_a_card_left_in_place_does_not() {
         let before = vec![(spade(5), Slot::Tableau(0)), (heart(9), Slot::Tableau(1))];
         let after = vec![(spade(5), Slot::Tableau(2)), (heart(9), Slot::Tableau(1))];
@@ -336,6 +380,29 @@ mod tests {
 
         let flights =
             plan_flights_for_move(&before, &after, &departures, FlightKind::Travel, true, 0.0);
+
+        assert!(flights.is_empty());
+    }
+
+    #[test]
+    fn plan_drag_flights_uses_the_requested_kind_for_every_dragged_card() {
+        let dragged = vec![spade(5), heart(6)];
+        let departures = vec![(spade(5), rect(1.0, 2.0)), (heart(6), rect(3.0, 4.0))];
+
+        let flights = plan_drag_flights(&dragged, &departures, FlightKind::SettleBack, 0.0);
+
+        assert_eq!(flights.len(), 2);
+        assert!(flights.iter().all(|f| f.kind == FlightKind::SettleBack));
+        assert_eq!(
+            flights.iter().find(|f| f.card == spade(5)).unwrap().from,
+            rect(1.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn plan_drag_flights_skips_a_card_with_no_captured_departure() {
+        let dragged = vec![spade(5)];
+        let flights = plan_drag_flights(&dragged, &[], FlightKind::Travel, 0.0);
 
         assert!(flights.is_empty());
     }
