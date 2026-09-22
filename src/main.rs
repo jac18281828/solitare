@@ -1010,23 +1010,27 @@ impl App {
         }
     }
 
+    /// `key` per `view_face_card`'s note, applied to the button in both the
+    /// filled and empty forms and wrapped in the same `card-frame` either
+    /// way: Yew reuses one DOM node across a slot's own empty ↔ filled
+    /// transitions only when both the wrapper and the button match on
+    /// every render, so keyboard focus on the slot survives it.
     fn view_foundation_slot(&self, ctx: &Context<Self>, pile: usize, lifted: &[Card]) -> Html {
         let on_click = ctx.link().callback(move |_| Msg::ClickFoundation(pile));
         let selected = self.game.is_selected(Selection::Foundation { pile });
         let drop_target = self.hover_target == Some(DropTarget::Foundation(pile));
         let foundation = &self.game.foundations[pile];
-        let top_away = foundation
-            .last()
-            .is_some_and(|card| self.is_away(*card, lifted));
-        let underlay = top_away
-            .then(|| Self::view_pile_underlay(foundation, &self.flights, TEMPLE_EMPTY_LABEL));
+        let key = format!("foundation-{pile}");
 
-        if let Some(card) = foundation.last().copied() {
+        let (button, underlay) = if let Some(card) = foundation.last().copied() {
+            let top_away = self.is_away(card, lifted);
+            let underlay = top_away
+                .then(|| Self::view_pile_underlay(foundation, &self.flights, TEMPLE_EMPTY_LABEL));
             let on_double_click = ctx.link().callback(|_| Msg::Noop);
             let pointer = Self::pointer_callbacks(ctx, Selection::Foundation { pile });
-            let face = self.view_face_card(
+            let button = self.view_face_card(
                 card,
-                format!("foundation-{pile}"),
+                key,
                 selected,
                 false,
                 top_away,
@@ -1036,16 +1040,12 @@ impl App {
                 Some(pile),
                 drop_target,
             );
-            html! {
-                <div class="card-frame">
-                    { for underlay }
-                    { face }
-                </div>
-            }
+            (button, underlay)
         } else {
-            html! {
+            let button = html! {
                 <button
                     type="button"
+                    key={key}
                     class={classes!(
                         "pile-empty",
                         selected.then_some("selected"),
@@ -1059,7 +1059,15 @@ impl App {
                     <span>{ TEMPLE_EMPTY_LABEL.0 }</span>
                     <span class="tiny">{ TEMPLE_EMPTY_LABEL.1 }</span>
                 </button>
-            }
+            };
+            (button, None)
+        };
+
+        html! {
+            <div class="card-frame">
+                { for underlay }
+                { button }
+            </div>
         }
     }
 }
@@ -1677,7 +1685,7 @@ impl Component for App {
                     "Recycle waste"
                 };
                 html! {
-                    <button type="button" class="pile-empty stock-empty" onclick={draw_stock.clone()} aria-label={label} disabled={locked} data-pile-slot="stock">
+                    <button type="button" key="stock" class="pile-empty stock-empty" onclick={draw_stock.clone()} aria-label={label} disabled={locked} data-pile-slot="stock">
                         <span>{ "REDEAL" }</span>
                         <span class="tiny">{ "STOCK" }</span>
                     </button>
@@ -1685,14 +1693,17 @@ impl Component for App {
             }
         };
 
-        let waste_view = if let Some(card) = self.game.waste.last().copied() {
+        // Same node-per-slot rule as `view_foundation_slot`: the button
+        // stays keyed "waste" and wrapped in `card-frame` whether the slot
+        // is filled or empty, so a reused node keeps keyboard focus.
+        let (waste_button, waste_underlay) = if let Some(card) = self.game.waste.last().copied() {
             let selected = self.game.is_selected(Selection::Waste);
             let away = self.is_away(card, &lifted);
             let underlay = away.then(|| {
                 Self::view_pile_underlay(&self.game.waste, &self.flights, WASTE_EMPTY_LABEL)
             });
             let pointer = Self::pointer_callbacks(ctx, Selection::Waste);
-            let face = self.view_face_card(
+            let button = self.view_face_card(
                 card,
                 "waste".to_string(),
                 selected,
@@ -1704,16 +1715,12 @@ impl Component for App {
                 None,
                 false,
             );
-            html! {
-                <div class="card-frame">
-                    { for underlay }
-                    { face }
-                </div>
-            }
+            (button, underlay)
         } else {
-            html! {
+            let button = html! {
                 <button
                     type="button"
+                    key="waste"
                     class="pile-empty"
                     onclick={click_waste}
                     aria-label="Waste pile"
@@ -1722,7 +1729,14 @@ impl Component for App {
                     <span>{ WASTE_EMPTY_LABEL.0 }</span>
                     <span class="tiny">{ WASTE_EMPTY_LABEL.1 }</span>
                 </button>
-            }
+            };
+            (button, None)
+        };
+        let waste_view = html! {
+            <div class="card-frame">
+                { for waste_underlay }
+                { waste_button }
+            </div>
         };
 
         let foundation_slots = (0..4)
