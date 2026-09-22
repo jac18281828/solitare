@@ -618,6 +618,30 @@ impl App {
         }
     }
 
+    /// Starts a drag once the gesture crosses the tap threshold. The overlay
+    /// becomes the dragged cards' only visible copy, so a flight still
+    /// carrying one of them retires. The origin is selected unless it
+    /// already is: the select_* calls toggle an active selection off.
+    fn lift_drag(&mut self, origin: Selection) {
+        let dragged = self.dragged_cards(origin);
+        self.flights
+            .retain(|flight| !dragged.contains(&flight.card));
+        if self.game.is_selected(origin) {
+            return;
+        }
+        match origin {
+            Selection::Waste => {
+                self.game.select_waste();
+            }
+            Selection::Foundation { pile } => {
+                self.game.select_foundation(pile);
+            }
+            Selection::Tableau { pile, index } => {
+                self.game.select_tableau(pile, index);
+            }
+        }
+    }
+
     fn is_flying(&self, card: Card) -> bool {
         self.flights.iter().any(|flight| flight.card == card)
     }
@@ -1589,31 +1613,7 @@ impl Component for App {
                 self.drag = Some(advanced);
 
                 if just_started {
-                    // The overlay becomes this card's only visible copy the
-                    // moment the gesture is a drag; a flight still under it
-                    // would otherwise double-draw the same card for as long
-                    // as both are on screen.
-                    let dragged = self.dragged_cards(origin);
-                    self.flights
-                        .retain(|flight| !dragged.contains(&flight.card));
-
-                    // The select_* calls toggle an already-active selection
-                    // off, so a drag that starts on an already-selected
-                    // card must skip reselecting it rather than deselect it
-                    // mid-gesture.
-                    if !self.game.is_selected(origin) {
-                        match origin {
-                            Selection::Waste => {
-                                self.game.select_waste();
-                            }
-                            Selection::Foundation { pile } => {
-                                self.game.select_foundation(pile);
-                            }
-                            Selection::Tableau { pile, index } => {
-                                self.game.select_tableau(pile, index);
-                            }
-                        }
-                    }
+                    self.lift_drag(origin);
                 }
 
                 self.hover_target = self
@@ -2345,6 +2345,48 @@ mod tests {
 
         assert_eq!(flights.len(), 1);
         assert_eq!(flights[0].kind, FlightKind::SettleBack);
+    }
+
+    #[test]
+    fn lift_drag_retires_the_dragged_cards_flight_and_selects_the_origin() {
+        let mut game = GameState::empty();
+        game.tableau[0].push(TableauCard {
+            card: spade(5),
+            face_up: true,
+            zeus_revealed: false,
+        });
+        let mut app = app_with(game);
+        app.flights.push(Flight::new(
+            spade(5),
+            rect(0.0, 0.0),
+            FlightKind::Travel,
+            0.0,
+        ));
+        app.flights.push(Flight::new(
+            spade(9),
+            rect(0.0, 0.0),
+            FlightKind::Travel,
+            0.0,
+        ));
+        let origin = Selection::Tableau { pile: 0, index: 0 };
+
+        app.lift_drag(origin);
+
+        assert_eq!(app.flights.len(), 1);
+        assert_eq!(app.flights[0].card, spade(9));
+        assert_eq!(app.game.selected, Some(origin));
+    }
+
+    #[test]
+    fn lift_drag_keeps_an_already_selected_origin_selected() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        app.lift_drag(Selection::Waste);
+
+        assert_eq!(app.game.selected, Some(Selection::Waste));
     }
 
     #[test]
