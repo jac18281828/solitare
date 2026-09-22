@@ -952,12 +952,14 @@ body::before {
     box-shadow: 0 16px 24px rgba(0, 0, 0, 0.4);
 }
 
-/* Beside .drag-overlay: paints above every section and below the victory
-   art (z-index: 3), never inside .tableau-scroll's clip. Each card is its
-   own fixed layer with its own measured destination, so a run's cards fly
-   to their own fanned slots rather than one shared point. */
+/* Portalled into <body>, never inside .tableau-scroll's clip, and painted
+   above every section but below the victory art (z-index: 3). Absolute with
+   no positioned ancestor between it and <body> places each card in page
+   coordinates, so a scroll mid-flight moves the card and its slot together.
+   Each card is its own layer with its own measured destination, so a run's
+   cards fly to their own fanned slots rather than one shared point. */
 .flight-card {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     z-index: 2;

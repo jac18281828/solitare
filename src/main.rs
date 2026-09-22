@@ -8,7 +8,7 @@ use solitare::game::{Card, EASY_DRAW_COUNT, GameState, HARD_DRAW_COUNT, Selectio
 use wasm_bindgen::JsCast;
 use web_sys::KeyboardEvent as DomKeyboardEvent;
 use yew::events::{MouseEvent, PointerEvent, TransitionEvent};
-use yew::{Classes, Component, Context, Html, Renderer, classes, html};
+use yew::{Classes, Component, Context, Html, Renderer, classes, create_portal, html};
 
 const TEMPLE_GOLD_STORAGE_KEY: &str = "solitare.temple_gold";
 
@@ -238,6 +238,18 @@ fn element_rect(selector: &str) -> Option<Rect> {
         width: rect.width(),
         height: rect.height(),
     })
+}
+
+/// The page's current scroll offset, read fresh at every rect capture so a
+/// scroll between two captures never leaves a stored rect stale.
+fn scroll_offset() -> (f64, f64) {
+    let Some(window) = web_sys::window() else {
+        return (0.0, 0.0);
+    };
+    (
+        window.scroll_x().unwrap_or(0.0),
+        window.scroll_y().unwrap_or(0.0),
+    )
 }
 
 /// A pressed card's on-screen box: its live flight-layer position when it
@@ -679,14 +691,19 @@ impl App {
         self.is_flying(card) || lifted.contains(&card)
     }
 
+    /// The stock slot's departure rect for a draw, in page coordinates: a
+    /// flight stores every rect it holds in that frame (`motion::Flight`).
     fn rect_for_stock_slot() -> Option<Rect> {
+        let (scroll_x, scroll_y) = scroll_offset();
         element_rect("[data-pile-slot='stock']")
+            .map(|rect| motion::to_page_rect(rect, scroll_x, scroll_y))
     }
 
     /// Every currently visible face-up card's departure rect, read from the
-    /// DOM before `mutate` changes `GameState`: a card already mid-flight
-    /// departs from its live flight-layer position, not its stale slot.
-    /// Empty under reduced motion, so callers never need their own guard.
+    /// DOM before `mutate` changes `GameState` and converted to page
+    /// coordinates: a card already mid-flight departs from its live
+    /// flight-layer position, not its stale slot. Empty under reduced
+    /// motion, so callers never need their own guard.
     fn capture_departure_rects(
         &self,
         before: &motion::Snapshot,
@@ -695,15 +712,18 @@ impl App {
         if reduced_motion {
             return Vec::new();
         }
+        let (scroll_x, scroll_y) = scroll_offset();
         before
             .iter()
             .filter_map(|(card, _)| {
                 let key = motion::card_key(*card);
-                let board = element_rect(&format!("[data-card-id='{key}']"));
+                let board = element_rect(&format!("[data-card-id='{key}']"))
+                    .map(|rect| motion::to_page_rect(rect, scroll_x, scroll_y));
                 let in_flight = self
                     .is_flying(*card)
                     .then(|| element_rect(&format!("[data-flight-card='{key}']")))
-                    .flatten();
+                    .flatten()
+                    .map(|rect| motion::to_page_rect(rect, scroll_x, scroll_y));
                 match (board, in_flight) {
                     (Some(board), in_flight) => {
                         Some((*card, motion::departure_rect(board, in_flight)))
@@ -715,9 +735,10 @@ impl App {
             .collect()
     }
 
-    /// A dragged card's departure rect at release: wherever the overlay
-    /// last drew it, read from the DOM before the overlay is torn down.
-    /// Empty under reduced motion, so callers never need their own guard.
+    /// A dragged card's departure rect at release, in page coordinates:
+    /// wherever the overlay last drew it, read from the DOM before the
+    /// overlay is torn down. Empty under reduced motion, so callers never
+    /// need their own guard.
     fn capture_overlay_departure_rects(
         &self,
         dragged: &[Card],
@@ -726,11 +747,13 @@ impl App {
         if reduced_motion {
             return Vec::new();
         }
+        let (scroll_x, scroll_y) = scroll_offset();
         dragged
             .iter()
             .filter_map(|card| {
                 let selector = format!("[data-overlay-card='{}']", motion::card_key(*card));
-                element_rect(&selector).map(|rect| (*card, rect))
+                element_rect(&selector)
+                    .map(|rect| (*card, motion::to_page_rect(rect, scroll_x, scroll_y)))
             })
             .collect()
     }
@@ -901,12 +924,15 @@ impl App {
     /// has no element (buried under a later draw) lands at once; an aimed
     /// one keeps flying to the slot it aimed at.
     fn measure_flight_destinations(&self, ctx: &Context<Self>) {
+        let (scroll_x, scroll_y) = scroll_offset();
         let mut measured: Vec<(Card, f64, Rect, Rect)> = Vec::new();
         for flight in &self.flights {
             let selector = format!("[data-card-id='{}']", motion::card_key(flight.card));
-            let destination = element_rect(&selector);
+            let destination =
+                element_rect(&selector).map(|rect| motion::to_page_rect(rect, scroll_x, scroll_y));
             let live_selector = format!("[data-flight-card='{}']", motion::card_key(flight.card));
-            let live = element_rect(&live_selector);
+            let live = element_rect(&live_selector)
+                .map(|rect| motion::to_page_rect(rect, scroll_x, scroll_y));
             match motion::resolve_flight_measurement(flight, destination, live) {
                 motion::FlightMeasurement::Vanished => {
                     ctx.link()
@@ -988,14 +1014,18 @@ impl App {
         }
     }
 
-    /// Every card in flight, each its own fixed-position layer so it can
-    /// travel to its own measured destination independently — a run flies
-    /// as a run, but each card keeps its own fan slot. Its shadow eases
-    /// from the lifted look to the board card's resting shadow over the
-    /// same transition as its transform, so it lands unchanged; landing on
+    /// Every card in flight, each its own absolutely positioned layer so it
+    /// can travel to its own measured destination independently — a run
+    /// flies as a run, but each card keeps its own fan slot. Portalled into
+    /// `<body>`, outside `.app-shell`'s clip, and positioned in page
+    /// coordinates so a scroll during the flight moves it and its slot
+    /// together instead of needing a re-measure. Its shadow eases from the
+    /// lifted look to the board card's resting shadow over the same
+    /// transition as its transform, so it lands unchanged; landing on
     /// `transitionend` is the fast path, the deadline sweep the fallback.
     fn view_flight_layer(&self, ctx: &Context<Self>) -> Html {
-        self.flights
+        let layer = self
+            .flights
             .iter()
             .map(|flight| {
                 let rect = flight.to.unwrap_or(flight.from);
@@ -1036,7 +1066,19 @@ impl App {
                     </div>
                 }
             })
-            .collect::<Html>()
+            .collect::<Html>();
+        create_portal(layer, Self::flight_layer_host())
+    }
+
+    /// The flight layer's portal target: `<body>` itself, which sits above
+    /// no positioned ancestor, so a flight card's `position: absolute`
+    /// places it in page coordinates and nothing clips it. Every document
+    /// has a body once the app has mounted.
+    fn flight_layer_host() -> web_sys::Element {
+        web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.query_selector("body").ok().flatten())
+            .expect("the document has a <body> once the app has mounted")
     }
 
     /// The dragged run's ghost, a single layer outside `.tableau-scroll` that

@@ -5,14 +5,29 @@
 
 use solitare::game::{Card, GameState, Suit};
 
-/// A card's on-screen box in CSS pixels, as `getBoundingClientRect` reports
-/// it: viewport-relative, matching a `position: fixed` flight layer.
+/// A card's on-screen box in CSS pixels, in one of two frames: viewport, as
+/// `getBoundingClientRect` reports it, or page, that box plus the page's
+/// scroll offset at the moment it was read. Pointer math, the drag overlay
+/// and hit-testing stay in the viewport frame; a `Flight`'s fields hold the
+/// page frame, and say so on their own doc comments.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Converts a viewport rect into the page frame by adding the scroll offset
+/// at read time. A page rect stays aligned with its element through a scroll
+/// that happens after it is read, since the same scroll moves both.
+pub fn to_page_rect(viewport: Rect, scroll_x: f64, scroll_y: f64) -> Rect {
+    Rect {
+        x: viewport.x + scroll_x,
+        y: viewport.y + scroll_y,
+        width: viewport.width,
+        height: viewport.height,
+    }
 }
 
 /// A flight's duration and easing differ by why the card is moving: a
@@ -45,7 +60,10 @@ impl FlightKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flight {
     pub card: Card,
+    /// Page frame: a mid-flight scroll moves the flight and its destination
+    /// together, so neither ever needs re-measuring on scroll alone.
     pub from: Rect,
+    /// Page frame; see `from`.
     pub to: Option<Rect>,
     pub kind: FlightKind,
     pub launched_at: f64,
@@ -351,6 +369,28 @@ mod tests {
             width: 60.0,
             height: 85.0,
         }
+    }
+
+    #[test]
+    fn to_page_rect_adds_the_scroll_offset() {
+        let viewport = rect(10.0, 20.0);
+
+        let page = to_page_rect(viewport, 0.0, 380.0);
+
+        assert_eq!(page, rect(10.0, 400.0));
+    }
+
+    #[test]
+    fn a_draw_departs_in_page_coordinates_when_the_page_has_scrolled() {
+        // The stock slot's viewport rect, converted the way `main.rs`
+        // converts every rect before it enters a `Flight`, then fed into
+        // the same production call that plans a draw's flight.
+        let stock_viewport = rect(4.0, 8.0);
+        let stock_page = to_page_rect(stock_viewport, 0.0, 380.0);
+
+        let flight = plan_draw_flight(Some(spade(1)), stock_page, false, 0.0).expect("a card drew");
+
+        assert_eq!(flight.from, rect(4.0, 388.0));
     }
 
     #[test]
