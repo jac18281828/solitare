@@ -561,8 +561,23 @@ impl App {
         (dragged, departures)
     }
 
-    /// Plans and launches a release's flight: Travel on a landed drop,
-    /// SettleBack on a rejected one or a cancel.
+    /// Undoes a cancelled drag: the selection returns to what it was before
+    /// the press, the drop highlight clears and the dragged cards settle
+    /// home. Ctx-free so a host test drives the code `PointerCancel` runs.
+    fn cancel_release(
+        &mut self,
+        tracker: &DragTracker,
+        dragged: &[Card],
+        departures: &[(Card, Rect)],
+        now: f64,
+    ) -> Vec<Flight> {
+        self.game.selected = tracker.selection_before;
+        self.hover_target = None;
+        Self::plan_release_flights(dragged, departures, false, now)
+    }
+
+    /// Plans and launches a landed or rejected drop's flight: Travel when
+    /// the drop moved the cards, SettleBack when it did not.
     fn launch_release(
         &mut self,
         ctx: &Context<Self>,
@@ -1663,9 +1678,9 @@ impl Component for App {
                 self.measure_pending = true;
                 let (dragged, departures) =
                     self.capture_release(tracker.origin, prefers_reduced_motion());
-                self.game.selected = tracker.selection_before;
-                self.hover_target = None;
-                self.launch_release(ctx, &dragged, &departures, false);
+                let flights =
+                    self.cancel_release(&tracker, &dragged, &departures, js_sys::Date::now());
+                self.launch_flights(ctx, flights);
             }
             Msg::ClearJustDragged => {
                 self.just_dragged = false;
@@ -2037,9 +2052,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, CardSteps, DragPhase, DropTarget, EMPTY_TABLEAU_NEEDS_KING, Flight, FlightKind,
-        ILLEGAL_FOUNDATION_MOVE, ILLEGAL_TABLEAU_MOVE, PointerPoint, Rect, advance_drag_phase,
-        exceeds_tap_threshold, fan_offsets,
+        App, CardSteps, DragPhase, DragTracker, DropTarget, EMPTY_TABLEAU_NEEDS_KING, Flight,
+        FlightKind, ILLEGAL_FOUNDATION_MOVE, ILLEGAL_TABLEAU_MOVE, PointerPoint, Rect,
+        advance_drag_phase, exceeds_tap_threshold, fan_offsets,
     };
     use solitare::game::{Card, GameState, Selection, Suit, TableauCard};
 
@@ -2337,12 +2352,37 @@ mod tests {
     }
 
     #[test]
-    fn plan_release_flights_settles_back_on_a_rejected_drop_or_cancel() {
+    fn plan_release_flights_settles_back_on_a_rejected_drop() {
         let dragged = vec![spade(5)];
         let departures = vec![(spade(5), rect(1.0, 2.0))];
 
         let flights = App::plan_release_flights(&dragged, &departures, false, 0.0);
 
+        assert_eq!(flights.len(), 1);
+        assert_eq!(flights[0].kind, FlightKind::SettleBack);
+    }
+
+    #[test]
+    fn cancel_release_restores_the_selection_and_settles_home() {
+        let mut game = GameState::empty();
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+        app.hover_target = Some(DropTarget::Tableau(2));
+        let tracker = DragTracker::new(
+            1,
+            Selection::Waste,
+            None,
+            PointerPoint { x: 0.0, y: 0.0 },
+            PointerPoint { x: 0.0, y: 0.0 },
+        );
+        let dragged = vec![spade(5)];
+        let departures = vec![(spade(5), rect(1.0, 2.0))];
+
+        let flights = app.cancel_release(&tracker, &dragged, &departures, 0.0);
+
+        assert_eq!(app.game.selected, None);
+        assert_eq!(app.hover_target, None);
         assert_eq!(flights.len(), 1);
         assert_eq!(flights[0].kind, FlightKind::SettleBack);
     }
