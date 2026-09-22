@@ -305,6 +305,10 @@ pub struct App {
     /// Every card currently travelling from where it was last drawn to
     /// where it lands, or settling back from a rejected drop.
     flights: Vec<Flight>,
+    /// Set by a card-moving message, so `rendered()` measures the board
+    /// only then; a `PointerMove` or `ToggleHelp` render never sets it, so
+    /// neither ever pays for a `getBoundingClientRect` call.
+    measure_pending: bool,
 }
 
 pub enum Msg {
@@ -642,6 +646,7 @@ impl App {
     /// and `click_tableau_pile`'s two-branch logic (which sets `status`
     /// itself) uses it directly.
     fn with_flights(&mut self, ctx: &Context<Self>, mutate: impl FnOnce(&mut Self)) {
+        self.measure_pending = true;
         let reduced_motion = prefers_reduced_motion();
         let before = motion::snapshot(&self.game);
         let departures = self.capture_departure_rects(&before, reduced_motion);
@@ -1080,6 +1085,7 @@ impl Component for App {
             just_dragged: false,
             hover_target: None,
             flights: Vec::new(),
+            measure_pending: false,
         }
     }
 
@@ -1091,11 +1097,15 @@ impl Component for App {
         let now = js_sys::Date::now();
         self.flights.retain(|flight| !flight.has_expired(now));
 
-        // Every render, not just the first: a flight's destination can only
-        // be measured once its (hidden) board copy has actually painted,
-        // and a card still in the air may need re-aiming toward a
-        // destination that has since moved.
-        self.measure_flight_destinations(ctx);
+        // A flight's destination can only be measured once its (hidden)
+        // board copy has actually painted, and a card still in the air may
+        // need re-aiming toward a destination that has since moved — but
+        // only a card-moving message can have changed either, so a render
+        // that did not set `measure_pending` skips the read entirely.
+        if self.measure_pending {
+            self.measure_pending = false;
+            self.measure_flight_destinations(ctx);
+        }
 
         if !first_render || self.key_listener.is_some() {
             return;
@@ -1193,8 +1203,10 @@ impl Component for App {
                 self.victory_rain_dismissed = false;
                 self.status = "You gave up. A fresh deck has been dealt.".to_string();
                 self.reset_flights();
+                self.measure_pending = true;
             }
             Msg::DrawStock => {
+                self.measure_pending = true;
                 let had_stock = !self.game.stock.is_empty();
                 let had_waste = !self.game.waste.is_empty();
                 let waste_before = self.game.waste.len();
@@ -1416,6 +1428,7 @@ impl Component for App {
                 // Nothing flies on Zeus' Vision; the reveal re-fans the
                 // whole board, so any flight in the air would land wrong.
                 self.reset_flights();
+                self.measure_pending = true;
             }
             Msg::SwitchDrawMode => {
                 let next = if self.game.draw_count == EASY_DRAW_COUNT {
@@ -1529,6 +1542,7 @@ impl Component for App {
                     // own click/dblclick to drive as it does today.
                     return false;
                 }
+                self.measure_pending = true;
 
                 // The overlay is still on screen at this point (this
                 // render hasn't patched the DOM yet), so its cards' rects
@@ -1562,6 +1576,7 @@ impl Component for App {
                     self.drag = Some(tracker);
                     return false;
                 }
+                self.measure_pending = true;
                 let reduced_motion = prefers_reduced_motion();
                 let dragged = self.dragged_cards(tracker.origin);
                 let departures = self.capture_overlay_departure_rects(&dragged, reduced_motion);
@@ -2081,6 +2096,7 @@ mod tests {
             just_dragged: false,
             hover_target: None,
             flights: Vec::new(),
+            measure_pending: false,
         }
     }
 
