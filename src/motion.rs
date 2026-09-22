@@ -110,15 +110,17 @@ pub fn reaim(flight: &mut Flight, live: Rect, destination: Rect, now: f64) {
 /// board slot and its own flight-layer element.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlightMeasurement {
-    /// The card has no element anywhere (buried by a later draw before this
-    /// flight could land): it lands at once rather than hanging until its
-    /// deadline.
+    /// The card has no element anywhere and the flight was never aimed
+    /// (buried by a later draw before its first measurement): it lands at
+    /// once rather than hanging at its departure until its deadline.
     Vanished,
     /// The destination moved since the flight last aimed at it: re-aim
     /// toward it from the flight's current live position.
     Moved { live: Rect, destination: Rect },
-    /// Nothing to do: the destination is unmeasured, unchanged, or the
-    /// flight's own live position could not be read this frame.
+    /// Nothing to do: the destination is unchanged, the flight's own live
+    /// position could not be read this frame, or an aimed flight's card was
+    /// covered in the air (a second card landing on the same pile), which
+    /// keeps flying to the slot it aimed at.
     Unchanged,
 }
 
@@ -131,7 +133,11 @@ pub fn resolve_flight_measurement(
     live: Option<Rect>,
 ) -> FlightMeasurement {
     let Some(destination) = destination else {
-        return FlightMeasurement::Vanished;
+        return if flight.to.is_none() {
+            FlightMeasurement::Vanished
+        } else {
+            FlightMeasurement::Unchanged
+        };
     };
     if flight.to == Some(destination) {
         return FlightMeasurement::Unchanged;
@@ -376,12 +382,22 @@ mod tests {
     }
 
     #[test]
-    fn a_flight_with_no_destination_lands_at_once() {
+    fn a_never_aimed_flight_with_no_destination_lands_at_once() {
         let flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 0.0);
 
         let measurement = resolve_flight_measurement(&flight, None, None);
 
         assert_eq!(measurement, FlightMeasurement::Vanished);
+    }
+
+    #[test]
+    fn an_aimed_flight_whose_card_is_covered_keeps_flying() {
+        let mut flight = Flight::new(spade(1), rect(0.0, 0.0), FlightKind::Travel, 0.0);
+        flight.to = Some(rect(10.0, 10.0));
+
+        let measurement = resolve_flight_measurement(&flight, None, Some(rect(4.0, 4.0)));
+
+        assert_eq!(measurement, FlightMeasurement::Unchanged);
     }
 
     #[test]

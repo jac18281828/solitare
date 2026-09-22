@@ -858,9 +858,9 @@ impl App {
     /// it along with the flight's own live position. Called from
     /// `rendered()`, after the render that moved it has already painted —
     /// a destination that has not changed is skipped, so an unrelated
-    /// render costs nothing beyond the read. A flight whose card has no
-    /// element at all (buried under a later draw before it could land)
-    /// lands at once instead of waiting for its own deadline.
+    /// render costs nothing beyond the read. A never-aimed flight whose card
+    /// has no element (buried under a later draw) lands at once; an aimed
+    /// one keeps flying to the slot it aimed at.
     fn measure_flight_destinations(&self, ctx: &Context<Self>) {
         let mut measured: Vec<(Card, f64, Rect, Rect)> = Vec::new();
         for flight in &self.flights {
