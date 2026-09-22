@@ -49,6 +49,10 @@ pub struct Flight {
     pub to: Option<Rect>,
     pub kind: FlightKind,
     pub launched_at: f64,
+    /// The flight's very first launch, held constant across every re-aim:
+    /// the anchor for its landing ceiling, since `launched_at` itself moves
+    /// forward on each re-aim.
+    pub first_launched_at: f64,
     /// Other cards that arrived in the same pile in the same batch without
     /// a flight of their own (a hard draw's lower two cards): excluded
     /// from underlay consideration until this flight lands.
@@ -63,6 +67,7 @@ impl Flight {
             to: None,
             kind,
             launched_at,
+            first_launched_at: launched_at,
             covers: Vec::new(),
         }
     }
@@ -72,8 +77,17 @@ impl Flight {
         self
     }
 
+    /// The absolute latest moment this flight may still be in the air,
+    /// however many times it has been re-aimed: its first launch plus
+    /// twice its duration, with the same 100ms landing grace as a normal
+    /// deadline. Without a ceiling, a destination that keeps moving could
+    /// re-aim — and so postpone — a flight's landing forever.
+    fn ceiling(&self) -> f64 {
+        self.first_launched_at + 2.0 * self.kind.duration_ms() + 100.0
+    }
+
     pub fn deadline(&self) -> f64 {
-        self.launched_at + self.kind.deadline_ms()
+        (self.launched_at + self.kind.deadline_ms()).min(self.ceiling())
     }
 
     pub fn has_expired(&self, now: f64) -> bool {
@@ -84,11 +98,48 @@ impl Flight {
 /// Re-aims a flight already under way: continues it from its current
 /// on-screen point toward a newly measured destination, restarting its
 /// clock from this moment so its deadline counts from the re-aim rather
-/// than the flight's original launch.
+/// than the flight's original launch — up to the flight's ceiling.
 pub fn reaim(flight: &mut Flight, live: Rect, destination: Rect, now: f64) {
     flight.from = live;
     flight.to = Some(destination);
     flight.launched_at = now;
+}
+
+/// What a flight's fresh measurement calls for: `destination` and `live`
+/// are whatever `main.rs` found (or did not) for the flight's card at its
+/// board slot and its own flight-layer element.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FlightMeasurement {
+    /// The card has no element anywhere (buried by a later draw before this
+    /// flight could land): it lands at once rather than hanging until its
+    /// deadline.
+    Vanished,
+    /// The destination moved since the flight last aimed at it: re-aim
+    /// toward it from the flight's current live position.
+    Moved { live: Rect, destination: Rect },
+    /// Nothing to do: the destination is unmeasured, unchanged, or the
+    /// flight's own live position could not be read this frame.
+    Unchanged,
+}
+
+/// Resolves one flight's measurement, given what `main.rs` found (or did
+/// not) in the DOM this frame. Ctx-free and DOM-free, so a host test can
+/// drive it directly.
+pub fn resolve_flight_measurement(
+    flight: &Flight,
+    destination: Option<Rect>,
+    live: Option<Rect>,
+) -> FlightMeasurement {
+    let Some(destination) = destination else {
+        return FlightMeasurement::Vanished;
+    };
+    if flight.to == Some(destination) {
+        return FlightMeasurement::Unchanged;
+    }
+    match live {
+        Some(live) => FlightMeasurement::Moved { live, destination },
+        None => FlightMeasurement::Unchanged,
+    }
 }
 
 /// A card's departure point: its live in-flight position when one exists,
@@ -325,16 +376,55 @@ mod tests {
     }
 
     #[test]
+    fn a_flight_with_no_destination_lands_at_once() {
+        let flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 0.0);
+
+        let measurement = resolve_flight_measurement(&flight, None, None);
+
+        assert_eq!(measurement, FlightMeasurement::Vanished);
+    }
+
+    #[test]
+    fn a_flight_re_aims_toward_a_moved_destination() {
+        let mut flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 0.0);
+        flight.to = Some(rect(10.0, 10.0));
+
+        let measurement =
+            resolve_flight_measurement(&flight, Some(rect(20.0, 20.0)), Some(rect(5.0, 5.0)));
+
+        assert_eq!(
+            measurement,
+            FlightMeasurement::Moved {
+                live: rect(5.0, 5.0),
+                destination: rect(20.0, 20.0),
+            }
+        );
+    }
+
+    #[test]
     fn reaiming_a_flight_resets_its_clock_to_the_reaim_moment() {
         let mut flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 100.0);
         flight.to = Some(rect(50.0, 50.0));
 
-        reaim(&mut flight, rect(20.0, 20.0), rect(90.0, 90.0), 500.0);
+        // Well short of the ceiling (100.0 + 2 * 220.0 + 100.0 = 640.0), so
+        // the normal per-re-aim deadline governs, not the ceiling.
+        reaim(&mut flight, rect(20.0, 20.0), rect(90.0, 90.0), 200.0);
 
         assert_eq!(flight.from, rect(20.0, 20.0));
         assert_eq!(flight.to, Some(rect(90.0, 90.0)));
-        assert_eq!(flight.launched_at, 500.0);
-        assert_eq!(flight.deadline(), 500.0 + FlightKind::Travel.deadline_ms());
+        assert_eq!(flight.launched_at, 200.0);
+        assert_eq!(flight.deadline(), 200.0 + FlightKind::Travel.deadline_ms());
+    }
+
+    #[test]
+    fn reaiming_never_moves_the_landing_past_the_ceiling() {
+        // First launch at 0ms; the ceiling is 2 * 220ms + 100ms = 540ms from
+        // there, however often the flight is re-aimed.
+        let mut flight = Flight::new(spade(5), rect(0.0, 0.0), FlightKind::Travel, 0.0);
+
+        reaim(&mut flight, rect(1.0, 1.0), rect(2.0, 2.0), 500.0);
+
+        assert_eq!(flight.deadline(), 540.0);
     }
 
     #[test]

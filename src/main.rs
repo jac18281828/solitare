@@ -780,12 +780,8 @@ impl App {
             // fires later, but by then this card's launched_at has moved
             // on, so `ExpireFlight` finds nothing to remove.
             self.flights.retain(|existing| existing.card != flight.card);
-            Self::arm_expiry(
-                ctx,
-                flight.card,
-                flight.launched_at,
-                flight.kind.deadline_ms() as u32,
-            );
+            let deadline_ms = (flight.deadline() - flight.launched_at).max(0.0) as u32;
+            Self::arm_expiry(ctx, flight.card, flight.launched_at, deadline_ms);
             self.flights.push(flight);
         }
     }
@@ -862,23 +858,27 @@ impl App {
     /// it along with the flight's own live position. Called from
     /// `rendered()`, after the render that moved it has already painted —
     /// a destination that has not changed is skipped, so an unrelated
-    /// render costs nothing beyond the read.
+    /// render costs nothing beyond the read. A flight whose card has no
+    /// element at all (buried under a later draw before it could land)
+    /// lands at once instead of waiting for its own deadline.
     fn measure_flight_destinations(&self, ctx: &Context<Self>) {
-        let measured: Vec<(Card, f64, Rect, Rect)> = self
-            .flights
-            .iter()
-            .filter_map(|flight| {
-                let selector = format!("[data-card-id='{}']", motion::card_key(flight.card));
-                let destination = element_rect(&selector)?;
-                if flight.to == Some(destination) {
-                    return None;
+        let mut measured: Vec<(Card, f64, Rect, Rect)> = Vec::new();
+        for flight in &self.flights {
+            let selector = format!("[data-card-id='{}']", motion::card_key(flight.card));
+            let destination = element_rect(&selector);
+            let live_selector = format!("[data-flight-card='{}']", motion::card_key(flight.card));
+            let live = element_rect(&live_selector);
+            match motion::resolve_flight_measurement(flight, destination, live) {
+                motion::FlightMeasurement::Vanished => {
+                    ctx.link()
+                        .send_message(Msg::ExpireFlight(flight.card, flight.launched_at));
                 }
-                let live_selector =
-                    format!("[data-flight-card='{}']", motion::card_key(flight.card));
-                let live = element_rect(&live_selector)?;
-                Some((flight.card, flight.launched_at, live, destination))
-            })
-            .collect();
+                motion::FlightMeasurement::Moved { live, destination } => {
+                    measured.push((flight.card, flight.launched_at, live, destination));
+                }
+                motion::FlightMeasurement::Unchanged => {}
+            }
+        }
         if !measured.is_empty() {
             ctx.link()
                 .send_message(Msg::FlightDestinationsMeasured(measured));
@@ -1677,8 +1677,8 @@ impl Component for App {
                     if let Some(flight) = self.flights.iter_mut().find(|flight| {
                         flight.card == card && flight.launched_at == guard_launched_at
                     }) {
-                        let deadline_ms = flight.kind.deadline_ms() as u32;
                         motion::reaim(flight, live, destination, now);
+                        let deadline_ms = (flight.deadline() - now).max(0.0) as u32;
                         Self::arm_expiry(ctx, card, now, deadline_ms);
                     }
                 }
