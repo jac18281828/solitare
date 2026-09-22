@@ -517,6 +517,24 @@ impl App {
         }
     }
 
+    /// The flights a drag's release plans: `moved` selects Travel or
+    /// SettleBack, the same choice a cancel always makes for itself. Ctx-free
+    /// so a host test can drive the landed and rejected cases directly,
+    /// through the code `PointerUp` and `PointerCancel` call.
+    fn plan_release_flights(
+        dragged: &[Card],
+        departures: &[(Card, Rect)],
+        moved: bool,
+        launched_at: f64,
+    ) -> Vec<Flight> {
+        let kind = if moved {
+            FlightKind::Travel
+        } else {
+            FlightKind::SettleBack
+        };
+        motion::plan_drag_flights(dragged, departures, kind, launched_at)
+    }
+
     /// Resolves a tap on tableau `pile`: extends the selection onto it, or
     /// without a selection, selects its top face-up card. Words a rejected
     /// move the same way `resolve_drop` does. Pure GameState-and-status
@@ -684,6 +702,35 @@ impl App {
         self.flights.clear();
     }
 
+    /// Resets session state onto a freshly dealt game, flights included.
+    /// `dealt` is a parameter, not a call to `GameState::new_shuffled_with_
+    /// draw_count` here, so a host test can supply a deterministic board
+    /// instead of a real shuffle.
+    fn reset_for_new_game(&mut self, dealt: GameState, carry_gold: usize) {
+        self.game = dealt;
+        self.game.temple_gold = carry_gold;
+        self.stop_all_to_temple();
+        self.end_state = None;
+        self.victory_gold_award = 0;
+        self.victory_rain_dismissed = false;
+        self.status = "You gave up. A fresh deck has been dealt.".to_string();
+        self.reset_flights();
+        self.measure_pending = true;
+    }
+
+    /// Words a recycle and clears any flight in the air: with the waste
+    /// shuffled back into the stock, no card already travelling corresponds
+    /// to where it was headed.
+    fn recycle_status(&mut self, gold_before: usize) -> String {
+        self.reset_flights();
+        let collected = gold_before.saturating_sub(self.game.temple_gold);
+        if collected > 0 {
+            format!("Recycled waste back into stock. Temple collected {collected} gold.")
+        } else {
+            "Recycled waste back into stock.".to_string()
+        }
+    }
+
     /// Appends each flight and arms its deadline: a flight always lands,
     /// even when its `transitionend` never fires (an element removed, a
     /// tab hidden, reduced motion switched on mid-flight).
@@ -718,10 +765,18 @@ impl App {
 
     /// Plans and launches the new waste top's flight from the stock slot,
     /// covering any lower cards a multi-draw reveals silently beneath it.
-    fn launch_draw_flight(&mut self, ctx: &Context<Self>, stock_rect: Rect, drawn: usize) {
+    fn launch_draw_flight(
+        &mut self,
+        ctx: &Context<Self>,
+        stock_rect: Rect,
+        drawn: usize,
+        reduced_motion: bool,
+    ) {
         let new_top = self.game.waste.last().copied();
         let launched_at = js_sys::Date::now();
-        let Some(flight) = motion::plan_draw_flight(new_top, stock_rect, false, launched_at) else {
+        let Some(flight) =
+            motion::plan_draw_flight(new_top, stock_rect, reduced_motion, launched_at)
+        else {
             return;
         };
         // Draw-3's lower two cards arrive silently: only the true top gets
@@ -1202,16 +1257,8 @@ impl Component for App {
                 } else {
                     0
                 };
-                let draw_count = self.game.draw_count;
-                self.game = GameState::new_shuffled_with_draw_count(draw_count);
-                self.game.temple_gold = carry_gold;
-                self.stop_all_to_temple();
-                self.end_state = None;
-                self.victory_gold_award = 0;
-                self.victory_rain_dismissed = false;
-                self.status = "You gave up. A fresh deck has been dealt.".to_string();
-                self.reset_flights();
-                self.measure_pending = true;
+                let dealt = GameState::new_shuffled_with_draw_count(self.game.draw_count);
+                self.reset_for_new_game(dealt, carry_gold);
             }
             Msg::DrawStock => {
                 self.measure_pending = true;
@@ -1231,24 +1278,14 @@ impl Component for App {
                     let suffix = if drawn == 1 { "" } else { "s" };
                     format!("Drew {drawn} card{suffix} to the waste pile.")
                 } else if had_waste {
-                    // A recycle cancels any flight in the air; nothing new
-                    // flies here.
-                    self.reset_flights();
-                    let collected = gold_before.saturating_sub(self.game.temple_gold);
-                    if collected > 0 {
-                        format!(
-                            "Recycled waste back into stock. Temple collected {collected} gold."
-                        )
-                    } else {
-                        "Recycled waste back into stock.".to_string()
-                    }
+                    self.recycle_status(gold_before)
                 } else {
                     "No cards available to draw.".to_string()
                 };
 
                 if let Some(stock_rect) = stock_rect {
                     let drawn = self.game.waste.len().saturating_sub(waste_before);
-                    self.launch_draw_flight(ctx, stock_rect, drawn);
+                    self.launch_draw_flight(ctx, stock_rect, drawn, reduced_motion);
                 }
 
                 if !had_stock && had_waste && self.game.temple_gold == 0 {
@@ -1566,13 +1603,12 @@ impl Component for App {
                 if !outcome.moved {
                     self.game.selected = tracker.selection_before;
                 }
-                let kind = if outcome.moved {
-                    FlightKind::Travel
-                } else {
-                    FlightKind::SettleBack
-                };
-                let flights =
-                    motion::plan_drag_flights(&dragged, &departures, kind, js_sys::Date::now());
+                let flights = Self::plan_release_flights(
+                    &dragged,
+                    &departures,
+                    outcome.moved,
+                    js_sys::Date::now(),
+                );
                 self.launch_flights(ctx, flights);
                 self.status = outcome.status;
             }
@@ -1590,12 +1626,8 @@ impl Component for App {
                 let departures = self.capture_overlay_departure_rects(&dragged, reduced_motion);
                 self.game.selected = tracker.selection_before;
                 self.hover_target = None;
-                let flights = motion::plan_drag_flights(
-                    &dragged,
-                    &departures,
-                    FlightKind::SettleBack,
-                    js_sys::Date::now(),
-                );
+                let flights =
+                    Self::plan_release_flights(&dragged, &departures, false, js_sys::Date::now());
                 self.launch_flights(ctx, flights);
             }
             Msg::ClearJustDragged => {
@@ -2245,5 +2277,67 @@ mod tests {
 
         assert!(!outcome.moved);
         assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
+    }
+
+    fn rect(x: f64, y: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width: 60.0,
+            height: 85.0,
+        }
+    }
+
+    #[test]
+    fn plan_release_flights_travels_on_a_landed_drop() {
+        let dragged = vec![spade(5)];
+        let departures = vec![(spade(5), rect(1.0, 2.0))];
+
+        let flights = App::plan_release_flights(&dragged, &departures, true, 0.0);
+
+        assert_eq!(flights.len(), 1);
+        assert_eq!(flights[0].kind, FlightKind::Travel);
+    }
+
+    #[test]
+    fn plan_release_flights_settles_back_on_a_rejected_drop_or_cancel() {
+        let dragged = vec![spade(5)];
+        let departures = vec![(spade(5), rect(1.0, 2.0))];
+
+        let flights = App::plan_release_flights(&dragged, &departures, false, 0.0);
+
+        assert_eq!(flights.len(), 1);
+        assert_eq!(flights[0].kind, FlightKind::SettleBack);
+    }
+
+    #[test]
+    fn reset_for_new_game_clears_flights_in_the_air() {
+        let mut app = app_with(GameState::empty());
+        app.flights.push(Flight::new(
+            spade(5),
+            rect(0.0, 0.0),
+            FlightKind::Travel,
+            0.0,
+        ));
+
+        app.reset_for_new_game(GameState::empty(), 0);
+
+        assert!(app.flights.is_empty());
+    }
+
+    #[test]
+    fn recycle_status_clears_flights_in_the_air() {
+        let mut app = app_with(GameState::empty());
+        app.flights.push(Flight::new(
+            spade(5),
+            rect(0.0, 0.0),
+            FlightKind::Travel,
+            0.0,
+        ));
+
+        let status = app.recycle_status(0);
+
+        assert!(app.flights.is_empty());
+        assert_eq!(status, "Recycled waste back into stock.");
     }
 }
