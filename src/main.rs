@@ -244,19 +244,19 @@ fn element_rect(selector: &str) -> Option<Rect> {
 /// is still in flight, or its own (board) box otherwise. A card pressed
 /// mid-flight is visible where the flight drew it, not at its hidden board
 /// slot, so the grab point must come from there.
-fn grab_source_rect(card: &web_sys::Element) -> Option<Rect> {
+fn grab_source_rect(card: &web_sys::Element) -> Rect {
     if let Some(id) = card.get_attribute("data-card-id")
         && let Some(in_flight) = element_rect(&format!("[data-flight-card='{id}']"))
     {
-        return Some(in_flight);
+        return in_flight;
     }
     let rect = card.get_bounding_client_rect();
-    Some(Rect {
+    Rect {
         x: rect.x(),
         y: rect.y(),
         width: rect.width(),
         height: rect.height(),
-    })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,7 +437,7 @@ impl App {
                 .target()
                 .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
                 .and_then(|element| element.closest(".card").ok().flatten())
-                .and_then(|card| grab_source_rect(&card))
+                .map(|card| grab_source_rect(&card))
                 .map(|rect| PointerPoint {
                     x: at.x - rect.x,
                     y: at.y - rect.y,
@@ -699,9 +699,9 @@ impl App {
     /// Runs `mutate` against the whole component, then plans and launches
     /// flights for every card the before/after snapshot diff calls moved.
     /// The one primitive every move path shares: `apply_move_with_flight`
-    /// wraps it for the common case of a single `GameState`-mutating call,
-    /// and `click_tableau_pile`'s two-branch logic (which sets `status`
-    /// itself) uses it directly.
+    /// wraps it for the common case of a single `GameState`-mutating call;
+    /// `Msg::ClickTableauPile`'s handler calls it directly, since
+    /// `click_tableau_pile`'s two-branch logic sets `status` itself.
     fn with_flights(&mut self, ctx: &Context<Self>, mutate: impl FnOnce(&mut Self)) {
         self.measure_pending = true;
         let reduced_motion = prefers_reduced_motion();
