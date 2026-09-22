@@ -119,6 +119,16 @@ struct DropOutcome {
     status: String,
 }
 
+/// What a `Msg::DrawStock` actually did, for its arm to word and to check
+/// for the out-of-gold ending: whether the stock had a card to draw or the
+/// waste one to recycle, and how many cards landed in the waste.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DrawOutcome {
+    had_stock: bool,
+    had_waste: bool,
+    drawn: usize,
+}
+
 /// One pointer's press-to-release gesture on a card or run. `origin` is the
 /// selection the gesture would pick up; `selection_before` is whatever was
 /// selected before the gesture started, restored on cancel or an illegal
@@ -535,6 +545,35 @@ impl App {
         motion::plan_drag_flights(dragged, departures, kind, launched_at)
     }
 
+    /// The dragged cards and their departure rects at a release: read
+    /// before anything moves them, since a landed drop's own mutation would
+    /// otherwise change what `dragged_cards(origin)` finds there. Shared by
+    /// a drop and a cancel, which diverge only after this capture — a drop
+    /// still has to resolve against its target before it knows whether it
+    /// moved.
+    fn capture_release(
+        &self,
+        origin: Selection,
+        reduced_motion: bool,
+    ) -> (Vec<Card>, Vec<(Card, Rect)>) {
+        let dragged = self.dragged_cards(origin);
+        let departures = self.capture_overlay_departure_rects(&dragged, reduced_motion);
+        (dragged, departures)
+    }
+
+    /// Plans and launches a release's flight: Travel on a landed drop,
+    /// SettleBack on a rejected one or a cancel.
+    fn launch_release(
+        &mut self,
+        ctx: &Context<Self>,
+        dragged: &[Card],
+        departures: &[(Card, Rect)],
+        moved: bool,
+    ) {
+        let flights = Self::plan_release_flights(dragged, departures, moved, js_sys::Date::now());
+        self.launch_flights(ctx, flights);
+    }
+
     /// Resolves a tap on tableau `pile`: extends the selection onto it, or
     /// without a selection, selects its top face-up card. Words a rejected
     /// move the same way `resolve_drop` does. Pure GameState-and-status
@@ -788,6 +827,34 @@ impl App {
             Vec::new()
         };
         self.launch_flights(ctx, vec![flight.with_covers(covers)]);
+    }
+
+    /// Draws or recycles the stock and launches the new waste top's flight:
+    /// the reduced-motion check, the stock's pre-draw rect and the drawn
+    /// count each live here once instead of twice across `Msg::DrawStock`.
+    fn draw_stock(&mut self, ctx: &Context<Self>) -> DrawOutcome {
+        let had_stock = !self.game.stock.is_empty();
+        let had_waste = !self.game.waste.is_empty();
+        let waste_before = self.game.waste.len();
+        let reduced_motion = prefers_reduced_motion();
+        // The new waste top departs from the stock slot, already face up:
+        // measure before the draw pops the stock's card.
+        let stock_rect = (had_stock && !reduced_motion)
+            .then(Self::rect_for_stock_slot)
+            .flatten();
+
+        self.game.draw_or_recycle();
+        let drawn = self.game.waste.len().saturating_sub(waste_before);
+
+        if let Some(stock_rect) = stock_rect {
+            self.launch_draw_flight(ctx, stock_rect, drawn, reduced_motion);
+        }
+
+        DrawOutcome {
+            had_stock,
+            had_waste,
+            drawn,
+        }
     }
 
     /// Measures every flight's current destination and, for one whose
@@ -1262,33 +1329,18 @@ impl Component for App {
             }
             Msg::DrawStock => {
                 self.measure_pending = true;
-                let had_stock = !self.game.stock.is_empty();
-                let had_waste = !self.game.waste.is_empty();
-                let waste_before = self.game.waste.len();
                 let gold_before = self.game.temple_gold;
-                let reduced_motion = prefers_reduced_motion();
-                // The new waste top departs from the stock slot, already
-                // face up: measure before the draw pops the stock's card.
-                let stock_rect = (had_stock && !reduced_motion)
-                    .then(Self::rect_for_stock_slot)
-                    .flatten();
-                self.game.draw_or_recycle();
-                self.status = if had_stock {
-                    let drawn = self.game.waste.len().saturating_sub(waste_before);
-                    let suffix = if drawn == 1 { "" } else { "s" };
-                    format!("Drew {drawn} card{suffix} to the waste pile.")
-                } else if had_waste {
+                let outcome = self.draw_stock(ctx);
+                self.status = if outcome.had_stock {
+                    let suffix = if outcome.drawn == 1 { "" } else { "s" };
+                    format!("Drew {} card{suffix} to the waste pile.", outcome.drawn)
+                } else if outcome.had_waste {
                     self.recycle_status(gold_before)
                 } else {
                     "No cards available to draw.".to_string()
                 };
 
-                if let Some(stock_rect) = stock_rect {
-                    let drawn = self.game.waste.len().saturating_sub(waste_before);
-                    self.launch_draw_flight(ctx, stock_rect, drawn, reduced_motion);
-                }
-
-                if !had_stock && had_waste && self.game.temple_gold == 0 {
+                if !outcome.had_stock && outcome.had_waste && self.game.temple_gold == 0 {
                     self.game.zeus_vision();
                     self.stop_all_to_temple();
                     self.end_state = Some(EndState::OutOfGold);
@@ -1588,14 +1640,8 @@ impl Component for App {
                     return false;
                 }
                 self.measure_pending = true;
-
-                // The overlay is still on screen at this point (this
-                // render hasn't patched the DOM yet), so its cards' rects
-                // are exactly where it last drew them.
-                let reduced_motion = prefers_reduced_motion();
-                let dragged = self.dragged_cards(tracker.origin);
-                let departures = self.capture_overlay_departure_rects(&dragged, reduced_motion);
-
+                let (dragged, departures) =
+                    self.capture_release(tracker.origin, prefers_reduced_motion());
                 let target = Self::hit_test_drop_target(x, y);
                 let outcome = self.resolve_drop(target);
                 self.just_dragged = true;
@@ -1603,13 +1649,7 @@ impl Component for App {
                 if !outcome.moved {
                     self.game.selected = tracker.selection_before;
                 }
-                let flights = Self::plan_release_flights(
-                    &dragged,
-                    &departures,
-                    outcome.moved,
-                    js_sys::Date::now(),
-                );
-                self.launch_flights(ctx, flights);
+                self.launch_release(ctx, &dragged, &departures, outcome.moved);
                 self.status = outcome.status;
             }
             Msg::PointerCancel(pointer_id) => {
@@ -1621,14 +1661,11 @@ impl Component for App {
                     return false;
                 }
                 self.measure_pending = true;
-                let reduced_motion = prefers_reduced_motion();
-                let dragged = self.dragged_cards(tracker.origin);
-                let departures = self.capture_overlay_departure_rects(&dragged, reduced_motion);
+                let (dragged, departures) =
+                    self.capture_release(tracker.origin, prefers_reduced_motion());
                 self.game.selected = tracker.selection_before;
                 self.hover_target = None;
-                let flights =
-                    Self::plan_release_flights(&dragged, &departures, false, js_sys::Date::now());
-                self.launch_flights(ctx, flights);
+                self.launch_release(ctx, &dragged, &departures, false);
             }
             Msg::ClearJustDragged => {
                 self.just_dragged = false;
