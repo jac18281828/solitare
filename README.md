@@ -8,7 +8,7 @@ Plays in your phone's browser, with nothing to install.
 
 ## How to play
 
-Draw from the stock and build the four temples from Ace to King, each built up by suit.
+Draw from the stock and build the four temples from Ace to King, each built up by suit. Build the tableau down, alternating colors; only a King can start an empty column.
 
 **Moving cards.** Tap or click a card to select it, then tap or click where it goes. Drag a card straight to its destination instead, and it flies there. Double-click or double-tap a waste or top tableau card to send it to a temple.
 
@@ -37,7 +37,7 @@ Once the stock is empty, tap or click it, now reading REDEAL, to recycle the was
 
 ## About
 
-Game logic lives in `src/game.rs`, pure Rust with host-run unit tests.
+Solitare of Olympus is Rust and Yew compiled to WebAssembly. Game logic lives in `src/game.rs`, pure Rust with host-run unit tests. This project is hosted at https://solitare.2ad.com.
 
 ## Run it locally
 
