@@ -20,7 +20,7 @@ Once the stock is empty, tap or click it, now reading REDEAL, to recycle the was
 - `Auto To Temple` sends one eligible card to a temple.
 - `All To Temple` repeats that until no temple move remains.
 - `Zeus' Vision` reveals every hidden card and ends the game.
-- New games start on Hard (draw 3). Before your first move, `Switch To Easy` (draw 1) and `Switch To Hard` change the mode.
+- The game opens on Hard (draw 3); a new deal keeps your mode. Before your first move, `Switch To Easy` (draw 1) and `Switch To Hard` change it.
 - `Give Up!` deals a fresh game at 0 gold; after a win it reads `Play Again` and keeps your gold.
 
 **Keyboard.** `D` or `Enter` draws, `Space` sends one card to a temple, `A` sends every eligible card.
