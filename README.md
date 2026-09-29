@@ -39,6 +39,8 @@ Once the stock is empty, tap or click it, now reading REDEAL, to recycle the was
 
 Solitare of Olympus is Rust and Yew compiled to WebAssembly. Game logic lives in `src/game.rs`, pure Rust with host-run unit tests. This project is hosted at https://solitare.2ad.com.
 
+The temple art's edge fade uses CSS masks and container query units, so it needs Safari 16 or later (Chrome and Firefox from 2023). Older browsers still play the game but show the art with hard edges or an oversized fade.
+
 ## Run it locally
 
 1. Install Rust and Trunk.
