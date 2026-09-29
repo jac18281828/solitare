@@ -384,11 +384,14 @@ impl GameState {
             }
         }
 
-        for pile in &self.foundations {
-            if let Some(top) = pile.last().copied() {
-                for dst in &self.tableau {
-                    if can_place_on_tableau(top, dst) {
-                        return true;
+        // Pulling a card off a foundation costs gold, so it is no move at zero.
+        if self.temple_gold > 0 {
+            for pile in &self.foundations {
+                if let Some(top) = pile.last().copied() {
+                    for dst in &self.tableau {
+                        if can_place_on_tableau(top, dst) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -528,7 +531,11 @@ impl GameState {
             return false;
         }
 
-        let gold_earned = match selection {
+        if self.lacks_gold_to_pull(selection) {
+            return false;
+        }
+
+        let gold_change: isize = match selection {
             Selection::Waste => {
                 let card = match self.waste.pop() {
                     Some(card) => card,
@@ -551,7 +558,7 @@ impl GameState {
                     face_up: true,
                     zeus_revealed: false,
                 });
-                1
+                -1
             }
             Selection::Tableau { pile, index } => {
                 let moved: Vec<TableauCard> = self.tableau[pile].drain(index..).collect();
@@ -563,9 +570,29 @@ impl GameState {
 
         self.selected = None;
         self.moves += 1;
-        self.temple_gold += gold_earned;
+        self.temple_gold = self.temple_gold.saturating_add_signed(gold_change);
         self.refresh_win();
         true
+    }
+
+    /// Whether the selected foundation card fits tableau column `target` and
+    /// only the missing gold keeps it from moving there.
+    pub fn foundation_pull_refused_for_gold(&self, target: usize) -> bool {
+        let Some(selection) = self.selected else {
+            return false;
+        };
+        self.lacks_gold_to_pull(selection)
+            && self.selected_card().is_some_and(|card| {
+                self.tableau
+                    .get(target)
+                    .is_some_and(|pile| can_place_on_tableau(card, pile))
+            })
+    }
+
+    /// A pull off a foundation costs 1 gold; at zero it is refused, so the
+    /// +1 for re-placing the card can never fund the trip.
+    fn lacks_gold_to_pull(&self, selection: Selection) -> bool {
+        matches!(selection, Selection::Foundation { .. }) && self.temple_gold == 0
     }
 
     pub fn selected_card(&self) -> Option<Card> {
@@ -1052,7 +1079,112 @@ mod tests {
             face_up: true,
             zeus_revealed: false,
         }];
+        game.temple_gold = 1;
         assert!(game.has_any_legal_move());
+    }
+
+    fn face_up(rank: u8, suit: Suit) -> TableauCard {
+        TableauCard {
+            card: c(rank, suit),
+            face_up: true,
+            zeus_revealed: false,
+        }
+    }
+
+    /// 9♠ tops foundation 0 and fits 10♥ on tableau column 0.
+    fn foundation_pull_fixture(gold: usize) -> GameState {
+        let mut game = GameState::empty();
+        for rank in 1..=9 {
+            game.foundations[0].push(c(rank, Suit::Spades));
+        }
+        game.tableau[0] = vec![face_up(10, Suit::Hearts)];
+        game.temple_gold = gold;
+        game
+    }
+
+    #[test]
+    fn has_any_legal_move_counts_foundation_pull_only_with_gold() {
+        assert!(foundation_pull_fixture(1).has_any_legal_move());
+        assert!(!foundation_pull_fixture(0).has_any_legal_move());
+    }
+
+    #[test]
+    fn foundation_to_tableau_costs_one_gold() {
+        let mut game = foundation_pull_fixture(2);
+
+        assert!(game.select_foundation(0));
+        assert!(game.move_selected_to_tableau(0));
+
+        assert_eq!(game.temple_gold, 1);
+        assert_eq!(game.foundations[0].len(), 8);
+        assert_eq!(game.tableau[0].len(), 2);
+        assert_eq!(game.moves, 1);
+    }
+
+    #[test]
+    fn foundation_to_tableau_at_zero_gold_is_refused_and_inert() {
+        let mut game = foundation_pull_fixture(0);
+        assert!(game.select_foundation(0));
+        let before = game.clone();
+
+        assert!(!game.move_selected_to_tableau(0));
+
+        assert_eq!(game, before);
+        assert_eq!(game.selected, Some(Selection::Foundation { pile: 0 }));
+    }
+
+    #[test]
+    fn foundation_pull_refusal_names_only_the_gold_case() {
+        let mut game = foundation_pull_fixture(0);
+        game.tableau[1] = vec![face_up(4, Suit::Hearts)];
+        assert!(game.select_foundation(0));
+
+        assert!(game.foundation_pull_refused_for_gold(0));
+        assert!(!game.foundation_pull_refused_for_gold(1));
+        assert!(!game.foundation_pull_refused_for_gold(2));
+        assert!(!game.foundation_pull_refused_for_gold(99));
+
+        game.temple_gold = 1;
+        assert!(!game.foundation_pull_refused_for_gold(0));
+
+        game.temple_gold = 0;
+        game.selected = None;
+        assert!(!game.foundation_pull_refused_for_gold(0));
+        game.selected = Some(Selection::Waste);
+        assert!(!game.foundation_pull_refused_for_gold(0));
+    }
+
+    #[test]
+    fn temple_round_trip_never_nets_gold() {
+        for start in [0, 1, 3] {
+            let mut game = GameState::empty();
+            game.tableau[0] = vec![face_up(1, Suit::Spades)];
+            game.tableau[1] = vec![face_up(2, Suit::Hearts)];
+            game.temple_gold = start;
+
+            assert!(game.select_tableau(0, 0));
+            assert!(game.move_selected_to_foundation(0));
+            assert!(game.select_foundation(0));
+            assert!(game.move_selected_to_tableau(1));
+
+            assert!(
+                game.temple_gold <= start,
+                "gold {start} became {}",
+                game.temple_gold
+            );
+        }
+    }
+
+    #[test]
+    fn waste_to_tableau_still_earns_one_gold() {
+        let mut game = GameState::empty();
+        game.tableau[0] = vec![face_up(10, Suit::Hearts)];
+        game.waste.push(c(9, Suit::Spades));
+
+        assert!(game.select_waste());
+        assert!(game.move_selected_to_tableau(0));
+
+        assert_eq!(game.temple_gold, 1);
     }
 
     #[test]

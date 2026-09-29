@@ -55,8 +55,9 @@ These rules apply to all AI-assisted changes in this repository.
 - Game logic (`src/game.rs`) must not depend on browser APIs, `yew`, or
   `wasm-bindgen`. Keep it pure so unit tests run on the host target.
 - Respect the scoring model: gold is earned on foundation placements and on
-  waste/foundation→tableau placements; tableau→tableau reshuffles earn nothing;
-  recycles cost one gold and end the game at zero.
+  waste→tableau placements; foundation→tableau costs one gold and needs one;
+  tableau→tableau reshuffles earn nothing; recycles cost one gold and end the
+  game at zero.
 - Do not introduce gold-farming loops. If a move can award gold, confirm the
   inverse move cannot reclaim that gold for a net positive.
 - UI components must honor `App::interactions_locked()` when an end state is

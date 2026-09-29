@@ -12,7 +12,7 @@ Draw from the stock and build the four temples from Ace to King, each built up b
 
 **Moving cards.** Tap or click a card to select it, then tap or click where it goes. Drag a card straight to its destination instead, and it flies there. Double-click or double-tap a waste or top tableau card to send it to a temple.
 
-**Temple Gold.** A card that reaches a temple earns a gold. So does a waste card placed on the tableau. Rearranging the tableau earns nothing.
+**Temple Gold.** A card that reaches a temple earns a gold. So does a waste card placed on the tableau. A card pulled down from a temple costs a gold, and the game refuses the pull at zero. Rearranging the tableau earns nothing.
 
 Once the stock is empty, tap or click it, now reading REDEAL, to recycle the waste into a new stock. Each recycle costs a gold; one that leaves you at zero ends the game.
 

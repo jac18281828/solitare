@@ -289,6 +289,7 @@ impl EndState {
 const ILLEGAL_TABLEAU_MOVE: &str = "Illegal tableau move.";
 const ILLEGAL_FOUNDATION_MOVE: &str = "Illegal foundation move.";
 const EMPTY_TABLEAU_NEEDS_KING: &str = "Only a King can move into an empty tableau column.";
+const FOUNDATION_PULL_NEEDS_GOLD: &str = "Pulling a card down from a temple costs 1 gold.";
 
 /// An empty waste or foundation slot's placeholder label, shared by the
 /// slot's own empty-state button and its underlay (shown while its last
@@ -382,11 +383,14 @@ impl App {
         format!("Placed card on foundation {}.", pile + 1)
     }
 
-    /// Words a rejected move onto `pile`: only an empty column needs a King,
-    /// every other rejection is an illegal move. Shared by the click and
-    /// drag paths so they cannot reword the same rejection differently.
+    /// Words a rejected move onto `pile`: a foundation pull lacking gold
+    /// says so, an empty column needs a King, every other rejection is an
+    /// illegal move. Shared by the click and drag paths so they cannot
+    /// reword the same rejection differently.
     fn tableau_rejection_status(&self, pile: usize) -> String {
-        if self.game.tableau[pile].is_empty() {
+        if self.game.foundation_pull_refused_for_gold(pile) {
+            FOUNDATION_PULL_NEEDS_GOLD.to_string()
+        } else if self.game.tableau[pile].is_empty() {
             EMPTY_TABLEAU_NEEDS_KING.to_string()
         } else {
             ILLEGAL_TABLEAU_MOVE.to_string()
@@ -619,6 +623,38 @@ impl App {
             && let Some(card) = self.game.selected_card()
         {
             self.status = format!("Selected top card {}.", Self::describe_card(card));
+        }
+    }
+
+    /// Resolves a tap on card `index` of tableau `pile`: moves the selection
+    /// onto the column, else reselects at the card. A move refused only for
+    /// gold keeps the selection so the player sees why. Ctx-free like
+    /// `click_tableau_pile`, so the caller launches any flight.
+    fn click_tableau_card(&mut self, pile: usize, index: usize) {
+        if self.game.selected.is_some() {
+            if self.game.move_selected_to_tableau(pile) {
+                self.status = Self::tableau_move_status(pile);
+            } else if self.game.foundation_pull_refused_for_gold(pile) {
+                self.status = FOUNDATION_PULL_NEEDS_GOLD.to_string();
+            } else if self.game.select_tableau(pile, index) {
+                if let Some(card) = self.game.selected_card() {
+                    self.status = format!(
+                        "Selected tableau run starting at {}.",
+                        Self::describe_card(card)
+                    );
+                }
+            } else {
+                self.status = ILLEGAL_TABLEAU_MOVE.to_string();
+            }
+        } else if self.game.select_tableau(pile, index) {
+            if let Some(card) = self.game.selected_card() {
+                self.status = format!(
+                    "Selected tableau run starting at {}.",
+                    Self::describe_card(card)
+                );
+            }
+        } else {
+            self.status = "That card is blocked by game rules.".to_string();
         }
     }
 
@@ -1498,30 +1534,7 @@ impl Component for App {
                 if self.just_dragged {
                     return false;
                 }
-                if self.game.selected.is_some() {
-                    if self.apply_move_with_flight(ctx, |game| game.move_selected_to_tableau(pile))
-                    {
-                        self.status = Self::tableau_move_status(pile);
-                    } else if self.game.select_tableau(pile, index) {
-                        if let Some(card) = self.game.selected_card() {
-                            self.status = format!(
-                                "Selected tableau run starting at {}.",
-                                Self::describe_card(card)
-                            );
-                        }
-                    } else {
-                        self.status = ILLEGAL_TABLEAU_MOVE.to_string();
-                    }
-                } else if self.game.select_tableau(pile, index) {
-                    if let Some(card) = self.game.selected_card() {
-                        self.status = format!(
-                            "Selected tableau run starting at {}.",
-                            Self::describe_card(card)
-                        );
-                    }
-                } else {
-                    self.status = "That card is blocked by game rules.".to_string();
-                }
+                self.with_flights(ctx, |app| app.click_tableau_card(pile, index));
             }
             Msg::DoubleClickTableauCard(pile, index) => {
                 // Guarded like Click*: a drag's mouseup can synthesize a
@@ -2094,9 +2107,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, CardSteps, DragPhase, DragTracker, DropTarget, EMPTY_TABLEAU_NEEDS_KING, Flight,
-        FlightKind, ILLEGAL_FOUNDATION_MOVE, ILLEGAL_TABLEAU_MOVE, PointerPoint, Rect,
-        advance_drag_phase, exceeds_tap_threshold, fan_offsets,
+        App, CardSteps, DragPhase, DragTracker, DropTarget, EMPTY_TABLEAU_NEEDS_KING,
+        FOUNDATION_PULL_NEEDS_GOLD, Flight, FlightKind, ILLEGAL_FOUNDATION_MOVE,
+        ILLEGAL_TABLEAU_MOVE, PointerPoint, Rect, advance_drag_phase, exceeds_tap_threshold,
+        fan_offsets,
     };
     use solitare::game::{Card, GameState, Selection, Suit, TableauCard};
 
@@ -2371,6 +2385,125 @@ mod tests {
 
         assert!(!outcome.moved);
         assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
+    }
+
+    /// 9♠ tops foundation 0, selected; column 0 holds 10♥, column 1 holds
+    /// 4♥ (the 9♠ does not fit it) and column 2 is empty.
+    fn app_with_selected_foundation_card(gold: usize) -> App {
+        let mut game = GameState::empty();
+        for rank in 1..=9 {
+            game.foundations[0].push(Card {
+                suit: Suit::Spades,
+                rank,
+            });
+        }
+        game.tableau[0].push(TableauCard {
+            card: heart(10),
+            face_up: true,
+            zeus_revealed: false,
+        });
+        game.tableau[1].push(card(4, true));
+        game.temple_gold = gold;
+        game.selected = Some(Selection::Foundation { pile: 0 });
+        app_with(game)
+    }
+
+    const FOUNDATION_SELECTION: Option<Selection> = Some(Selection::Foundation { pile: 0 });
+
+    #[test]
+    fn click_tableau_pile_words_a_gold_refusal_and_keeps_the_selection() {
+        let mut app = app_with_selected_foundation_card(0);
+
+        app.click_tableau_pile(0);
+
+        assert_eq!(app.status, FOUNDATION_PULL_NEEDS_GOLD);
+        assert_eq!(app.game.selected, FOUNDATION_SELECTION);
+        assert_eq!(app.game.foundations[0].len(), 9);
+    }
+
+    #[test]
+    fn click_tableau_card_words_a_gold_refusal_and_keeps_the_selection() {
+        let mut app = app_with_selected_foundation_card(0);
+
+        app.click_tableau_card(0, 0);
+
+        assert_eq!(app.status, FOUNDATION_PULL_NEEDS_GOLD);
+        assert_eq!(app.game.selected, FOUNDATION_SELECTION);
+        assert_eq!(app.game.foundations[0].len(), 9);
+    }
+
+    #[test]
+    fn resolve_drop_words_a_gold_refusal() {
+        let mut app = app_with_selected_foundation_card(0);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(0)));
+
+        assert!(!outcome.moved);
+        assert_eq!(outcome.status, FOUNDATION_PULL_NEEDS_GOLD);
+        assert_eq!(app.game.selected, FOUNDATION_SELECTION);
+    }
+
+    #[test]
+    fn gold_refusal_beats_the_empty_column_wording_for_a_king() {
+        let mut app = app_with_selected_foundation_card(0);
+        app.game.foundations[0].clear();
+        for rank in 1..=13 {
+            app.game.foundations[0].push(Card {
+                suit: Suit::Spades,
+                rank,
+            });
+        }
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(2)));
+
+        assert_eq!(outcome.status, FOUNDATION_PULL_NEEDS_GOLD);
+    }
+
+    #[test]
+    fn a_foundation_card_that_does_not_fit_gets_the_usual_wording() {
+        let mut app = app_with_selected_foundation_card(0);
+
+        app.click_tableau_pile(1);
+        assert_eq!(app.status, ILLEGAL_TABLEAU_MOVE);
+
+        app.click_tableau_pile(2);
+        assert_eq!(app.status, EMPTY_TABLEAU_NEEDS_KING);
+
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(1)));
+        assert_eq!(outcome.status, ILLEGAL_TABLEAU_MOVE);
+
+        app.click_tableau_card(1, 0);
+        assert_ne!(app.status, FOUNDATION_PULL_NEEDS_GOLD);
+    }
+
+    #[test]
+    fn with_gold_the_foundation_pull_lands_on_every_path() {
+        let mut app = app_with_selected_foundation_card(1);
+        app.click_tableau_card(0, 0);
+        assert_eq!(app.status, "Moved cards to tableau column 1.");
+        assert_eq!(app.game.temple_gold, 0);
+
+        let mut app = app_with_selected_foundation_card(1);
+        let outcome = app.resolve_drop(Some(DropTarget::Tableau(0)));
+        assert!(outcome.moved);
+    }
+
+    #[test]
+    fn click_tableau_card_reselects_when_a_non_gold_move_fails() {
+        let mut game = GameState::empty();
+        game.tableau[0].push(card(9, true));
+        game.tableau[1].push(card(8, true));
+        game.waste.push(spade(5));
+        game.selected = Some(Selection::Waste);
+        let mut app = app_with(game);
+
+        app.click_tableau_card(1, 0);
+
+        assert_eq!(
+            app.game.selected,
+            Some(Selection::Tableau { pile: 1, index: 0 })
+        );
+        assert!(app.status.starts_with("Selected tableau run starting at"));
     }
 
     fn rect(x: f64, y: f64) -> Rect {
